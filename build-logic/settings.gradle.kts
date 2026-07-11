@@ -1,6 +1,4 @@
 pluginManagement {
-    // Our convention plugins (rickandmorty.android.*) live in this included build
-    includeBuild("build-logic")
     repositories {
         google {
             content {
@@ -13,23 +11,19 @@ pluginManagement {
         gradlePluginPortal()
     }
 }
-plugins {
-    id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
-}
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
         google()
         mavenCentral()
     }
+    versionCatalogs {
+        // Share the main project's catalog so conventions and modules
+        // always agree on versions
+        create("libs") {
+            from(files("../gradle/libs.versions.toml"))
+        }
+    }
 }
 
-enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
-
-rootProject.name = "rick-and-morty"
-include(":app")
-include(":core:model")
-include(":core:ui")
-include(":core:data")
-include(":feature:characterlist")
-include(":feature:characterdetail")
+rootProject.name = "build-logic"

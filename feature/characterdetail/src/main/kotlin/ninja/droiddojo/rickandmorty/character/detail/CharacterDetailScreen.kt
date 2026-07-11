@@ -32,7 +32,7 @@ import androidx.compose.ui.tooling.preview.datasource.CollectionPreviewParameter
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import ninja.droiddojo.rickandmorty.PreviewContainer
-import ninja.droiddojo.rickandmorty.R
+import ninja.droiddojo.rickandmorty.feature.characterdetail.R
 import ninja.droiddojo.rickandmorty.character.CharacterSampleData
 
 @Composable
@@ -65,7 +65,7 @@ private fun CharacterDetailContent(state: CharacterDetailUiState, onNavigateBack
                 title = {
                     Text(
                         text = if (state is CharacterDetailUiState.Success) state.character.name else
-                            stringResource(id = R.string.app_name)
+                            stringResource(id = R.string.character_detail_title)
                     )
                 },
             )
