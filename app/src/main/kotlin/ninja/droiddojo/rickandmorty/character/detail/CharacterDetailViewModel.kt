@@ -6,8 +6,14 @@ import dagger.assisted.Assisted
 import dagger.assisted.AssistedFactory
 import dagger.assisted.AssistedInject
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.WhileSubscribed
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import ninja.droiddojo.rickandmorty.character.data.CharacterRepository
 
@@ -17,20 +23,34 @@ class CharacterDetailViewModel @AssistedInject constructor(
     @Assisted private val id: Int,
 ) : ViewModel() {
 
-    val uiState: StateFlow<CharacterDetailUiState>
-        field = MutableStateFlow<CharacterDetailUiState>(CharacterDetailUiState.Loading)
+    private val isRefreshFailed = MutableStateFlow(false)
+
+    val uiState: StateFlow<CharacterDetailUiState> =
+        combine(repository.observeCharacter(id), isRefreshFailed) { character, refreshFailed ->
+            when {
+                character != null -> CharacterDetailUiState.Success(character)
+                refreshFailed -> CharacterDetailUiState.Error("Keine Verbindung")
+                else -> CharacterDetailUiState.Loading
+            }
+        }.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5.seconds),
+            initialValue = CharacterDetailUiState.Loading,
+        )
 
     init {
-        loadCharacter(id)
+        refresh()
     }
 
-    private fun loadCharacter(id: Int) {
+    fun refresh() {
         viewModelScope.launch {
+            isRefreshFailed.value = false
             try {
-                val character = repository.getCharacter(id)
-                uiState.value = CharacterDetailUiState.Success(character)
+                repository.refreshCharacter(id)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                uiState.value = CharacterDetailUiState.Error(e.message ?: "An unknown error occurred")
+                isRefreshFailed.value = true
             }
         }
     }
