@@ -23,13 +23,13 @@ import androidx.compose.ui.tooling.preview.PreviewLightDark
 import androidx.compose.ui.tooling.preview.PreviewParameter
 import androidx.compose.ui.tooling.preview.datasource.CollectionPreviewParameterProvider
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import ninja.droiddojo.rickandmorty.PreviewContainer
 import ninja.droiddojo.rickandmorty.character.CharacterSampleData
 
 @Composable
 fun CharacterListScreen(
-    viewModel: CharacterListViewModel = viewModel(),
+    viewModel: CharacterListViewModel = hiltViewModel(),
     onCharacterClick: (Int) -> Unit
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()

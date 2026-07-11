@@ -2,15 +2,18 @@ package ninja.droiddojo.rickandmorty.character.list
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import ninja.droiddojo.rickandmorty.Dependencies
 import ninja.droiddojo.rickandmorty.character.data.CharacterRepository
 
-class CharacterListViewModel : ViewModel() {
-    private val repository: CharacterRepository = Dependencies.characterRepository
+@HiltViewModel
+class CharacterListViewModel @Inject constructor(
+    private val repository: CharacterRepository,
+) : ViewModel() {
     val uiState: StateFlow<CharacterListUiState>
         field = MutableStateFlow<CharacterListUiState>(CharacterListUiState.Loading)
 

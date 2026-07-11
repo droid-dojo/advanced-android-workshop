@@ -1,19 +1,22 @@
 package ninja.droiddojo.rickandmorty.character.detail
 
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import dagger.assisted.Assisted
+import dagger.assisted.AssistedFactory
+import dagger.assisted.AssistedInject
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import ninja.droiddojo.rickandmorty.Dependencies
 import ninja.droiddojo.rickandmorty.character.data.CharacterRepository
 
-class CharacterDetailViewModel(
-    private val id: Int,
+@HiltViewModel(assistedFactory = CharacterDetailViewModel.Factory::class)
+class CharacterDetailViewModel @AssistedInject constructor(
+    private val repository: CharacterRepository,
+    @Assisted private val id: Int,
 ) : ViewModel() {
 
-    private val repository: CharacterRepository = Dependencies.characterRepository
     val uiState: StateFlow<CharacterDetailUiState>
         field = MutableStateFlow<CharacterDetailUiState>(CharacterDetailUiState.Loading)
 
@@ -32,9 +35,8 @@ class CharacterDetailViewModel(
         }
     }
 
-    class Factory(private val id: Int) : ViewModelProvider.Factory {
-        @Suppress("UNCHECKED_CAST")
-        override fun <T : ViewModel> create(modelClass: Class<T>): T =
-            CharacterDetailViewModel(id) as T
+    @AssistedFactory
+    interface Factory {
+        fun create(id: Int): CharacterDetailViewModel
     }
 }
