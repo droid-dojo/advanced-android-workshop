@@ -41,6 +41,8 @@ dependencies {
     implementation(projects.feature.characterlist)
     implementation(projects.feature.characterdetail)
     implementation(projects.core.ui)
+    implementation(projects.core.analytics.api)
+    implementation(projects.core.analytics.impl)
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

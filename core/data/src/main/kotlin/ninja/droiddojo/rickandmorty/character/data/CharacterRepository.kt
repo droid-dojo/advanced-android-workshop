@@ -2,8 +2,10 @@ package ninja.droiddojo.rickandmorty.character.data
 
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import ninja.droiddojo.rickandmorty.analytics.AppLogger
 import ninja.droiddojo.rickandmorty.character.data.api.RickAndMortyApi
 import ninja.droiddojo.rickandmorty.character.data.db.CharacterDao
 import ninja.droiddojo.rickandmorty.character.data.db.toDomain
@@ -13,6 +15,7 @@ import ninja.droiddojo.rickandmorty.character.data.db.toEntity
 class CharacterRepository @Inject constructor(
     private val api: RickAndMortyApi,
     private val dao: CharacterDao,
+    private val logger: AppLogger,
 ) {
     // READ path: observe the database, the single source of truth
     fun observeCharacters(): Flow<List<Character>> =
@@ -23,20 +26,42 @@ class CharacterRepository @Inject constructor(
 
     // WRITE path: network -> database, never network -> UI
     suspend fun refreshCharacters() {
-        // The API knows nothing about favorites: keep the local flags alive
-        val favoriteIds = dao.getFavoriteIds().toSet()
-        val entities = api.getCharacters().results.map { dto ->
-            dto.toEntity(isFavorite = dto.id in favoriteIds)
+        try {
+            // The API knows nothing about favorites: keep the local flags alive
+            val favoriteIds = dao.getFavoriteIds().toSet()
+            val entities = api.getCharacters().results.map { dto ->
+                dto.toEntity(isFavorite = dto.id in favoriteIds)
+            }
+            dao.upsertAll(entities)
+            logger.debug(TAG, "Cached ${entities.size} characters")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Log-and-rethrow: record the technical detail here,
+            // the caller still decides what the failure means
+            logger.error(TAG, "Refreshing character list failed", e)
+            throw e
         }
-        dao.upsertAll(entities)
     }
 
     suspend fun refreshCharacter(id: Int) {
-        val favoriteIds = dao.getFavoriteIds().toSet()
-        dao.upsert(api.getCharacter(id).toEntity(isFavorite = id in favoriteIds))
+        try {
+            val favoriteIds = dao.getFavoriteIds().toSet()
+            dao.upsert(api.getCharacter(id).toEntity(isFavorite = id in favoriteIds))
+            logger.debug(TAG, "Refreshed character $id")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.error(TAG, "Refreshing character $id failed", e)
+            throw e
+        }
     }
 
     suspend fun toggleFavorite(id: Int) {
         dao.toggleFavorite(id)
+    }
+
+    companion object {
+        private const val TAG = "CharacterRepository"
     }
 }

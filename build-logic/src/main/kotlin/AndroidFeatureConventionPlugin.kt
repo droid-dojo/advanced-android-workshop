@@ -31,6 +31,9 @@ class AndroidFeatureConventionPlugin : Plugin<Project> {
         dependencies {
             add("implementation", project(":core:model"))
             add("implementation", project(":core:ui"))
+            // Every feature tracks screens & events (Übung 2.1) - one line here
+            // instead of one line per feature module
+            add("implementation", project(":core:analytics:api"))
 
             add("implementation", platform(libs.findLibrary("androidx-compose-bom").get()))
             add("implementation", libs.findLibrary("androidx-compose-ui").get())

@@ -33,6 +33,8 @@ import androidx.compose.ui.tooling.preview.datasource.CollectionPreviewParameter
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import ninja.droiddojo.rickandmorty.PreviewContainer
+import ninja.droiddojo.rickandmorty.analytics.LocalAnalyticsTracker
+import ninja.droiddojo.rickandmorty.analytics.TrackScreen
 import ninja.droiddojo.rickandmorty.character.CharacterSampleData
 
 @Composable
@@ -40,11 +42,18 @@ fun CharacterListScreen(
     viewModel: CharacterListViewModel = hiltViewModel(),
     onCharacterClick: (Int) -> Unit
 ) {
+    TrackScreen("character_list")
+
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val tracker = LocalAnalyticsTracker.current
 
     CharacterListContent(
         state = state,
-        onFavoriteClick = viewModel::toggleFavorite,
+        onFavoriteClick = { id ->
+            // User event, captured at the point of interaction - not in the ViewModel
+            tracker.trackEvent("toggle_favorite", mapOf("character_id" to id.toString()))
+            viewModel.toggleFavorite(id)
+        },
         onCharacterClick = onCharacterClick
     )
 }

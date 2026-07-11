@@ -12,6 +12,7 @@ android {
 dependencies {
     // Character & Place appear in the repository's public API -> api, not implementation
     api(projects.core.model)
+    implementation(projects.core.analytics.api)
 
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.retrofit)

@@ -1,6 +1,5 @@
 package ninja.droiddojo.rickandmorty.character.data.api
 
-import android.util.Log
 import kotlinx.serialization.Serializable
 import ninja.droiddojo.rickandmorty.character.data.Place
 
@@ -13,13 +12,6 @@ data class PlaceDto(
 fun PlaceDto.toDomain(): Place? {
     if (url.isBlank() || name == "unknown") return null
 
-    return try {
-        Place(
-            id = url.removePrefix("https://rickandmortyapi.com/api/location/").toInt(),
-            name = name
-        )
-    } catch (e: NumberFormatException) {
-        Log.e("PlaceDto", "Invalid URL format: $url for location: $name", e)
-        null
-    }
+    val id = url.removePrefix("https://rickandmortyapi.com/api/location/").toIntOrNull() ?: return null
+    return Place(id = id, name = name)
 }

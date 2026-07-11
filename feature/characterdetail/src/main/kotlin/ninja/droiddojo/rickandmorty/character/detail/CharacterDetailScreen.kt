@@ -32,6 +32,7 @@ import androidx.compose.ui.tooling.preview.datasource.CollectionPreviewParameter
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import ninja.droiddojo.rickandmorty.PreviewContainer
+import ninja.droiddojo.rickandmorty.analytics.TrackScreen
 import ninja.droiddojo.rickandmorty.feature.characterdetail.R
 import ninja.droiddojo.rickandmorty.character.CharacterSampleData
 
@@ -40,6 +41,8 @@ fun CharacterDetailScreen(
     viewModel: CharacterDetailViewModel,
     onNavigateBack: () -> Unit,
 ) {
+    TrackScreen("character_detail")
+
     val state by viewModel.uiState.collectAsStateWithLifecycle()
 
     CharacterDetailContent(
