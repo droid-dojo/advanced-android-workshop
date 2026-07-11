@@ -31,6 +31,8 @@ Unsere App aus dem Einführungs-Workshop hat drei Baustellen, die wir heute ange
 
 ---
 
+# Tag 1: Modularisierung, Dependency Injection & Offline-First
+
 ## Modul 1: Kotlin-Idiome für Java-Entwickler
 
 Die Grundlagen (`val`/`var`, Null Safety, `data class`, Lambdas) kennen wir bereits. In diesem Modul geht es um die Idiome, die Kotlin-Code von "Java mit anderer Syntax" unterscheiden und uns in den heutigen Übungen ständig begegnen werden.
@@ -1109,6 +1111,567 @@ fun `refresh failure keeps cached data available`() = runTest {
 ```
 
 Genau solche Tests schreiben wir in Übung 1.2: Sie sind die "Definition of Done" für unser Offline-Verhalten.
+
+---
+
+# Tag 2: Clean Error Handling, Analytics & Logging, JVM-Testing
+
+Willkommen zu Tag 2! Unsere App ist seit gestern modular, Hilt-verdrahtet und offline-fähig. Heute machen wir sie **betriebstauglich**: Wir behandeln Fehler als Teil der Architektur statt als Überraschung, bauen Analytics und Logging ein, ohne die Architektur zu verschmutzen, und beweisen mit JVM-Tests, dass unsere reaktiven ViewModels tun, was sie sollen.
+
+### Die Agenda für Tag 2
+
+| Block | Thema |
+| --- | --- |
+| Theorie | Fehlerbehandlung auf Architektur-Ebene (Modul 6) |
+| Theorie | Architektur-konformes Analytics & Logging (Modul 7) |
+| Theorie | Testbarkeit & moderne Testwerkzeuge (Modul 8) |
+| **Praxis** | **Übung 2.1:** Entkoppelte Analytics- & Logging-Schnittstellen |
+| **Praxis** | **Übung 2.2:** ViewModel-Unit-Tests mit virtueller Zeit |
+
+### Setup für Tag 2
+
+Übung 2.1 kommt komplett ohne neue Dependencies aus. Für Übung 2.2 brauchen wir **Turbine** (Flow-Testing) und **kotlin-test** (für `assertIs`, Modul 8.7) sowie JUnit und `kotlinx-coroutines-test` im Feature-Modul:
+
+```toml
+[versions]
+# ... existing versions ...
+turbine = "1.2.1"
+
+[libraries]
+# ... existing libraries ...
+turbine = { group = "app.cash.turbine", name = "turbine", version.ref = "turbine" }
+kotlin-test = { group = "org.jetbrains.kotlin", name = "kotlin-test", version.ref = "kotlin" }
+```
+
+```kotlin
+// feature/characterlist/build.gradle.kts
+dependencies {
+    // ... existing dependencies ...
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.turbine)
+    testImplementation(libs.kotlin.test)
+}
+```
+
+---
+
+## Modul 6: Fehlerbehandlung auf Architektur-Ebene
+
+### 6.1 Das Problem: Exceptions kennen keine Schichten
+
+**Das Problem (Java-Gewohnheit):**
+In Java zwingen *Checked Exceptions* den Aufrufer, die Fehler zu behandeln (`throws IOException`). Kotlin hat **keine** Checked Exceptions: Der Compiler sagt uns nirgendwo, dass `api.getCharacters()` scheitern kann. Die Folge in vielen Codebasen:
+
+```kotlin
+// Somewhere in the UI layer, far away from the network code:
+try {
+    viewModel.doSomething()
+} catch (e: Exception) { // What can even be thrown here? Nobody knows.
+    // ...
+}
+```
+
+Exceptions durchtunneln unsichtbar alle Schichten. Wer sie wo fängt, ist Zufall, und ein vergessener `catch` ist ein Crash beim Kunden.
+
+**Die zwei Rollen von Fehlern:**
+
+1. **Erwartbare Fehler** (kein Netz, Server down, Datensatz nicht gefunden): Das sind **fachliche Zustände**, keine Ausnahmen. Der User braucht eine Reaktion darauf.
+2. **Programmierfehler** (Bug, kaputte Invariante): Die dürfen ruhig laut knallen: Sie sollen im Testing auffallen, nicht stumm weggefangen werden.
+
+> **Faustregel:**
+> **Exceptions sind ein Implementierungsdetail einer Schicht.** Über Schicht-Grenzen hinweg reisen Fehler als **Werte** (Zustände, Result-Typen), niemals als ungefangene Exceptions.
+
+### 6.2 Fehler als Domain-Zustand: Das kennen wir schon
+
+Die gute Nachricht: Wir arbeiten seit Tag 1 nach diesem Prinzip, ohne es so genannt zu haben.
+
+*   `CharacterListUiState` ist ein `sealed interface`: `Error` ist ein **gleichberechtigter Zustand** neben `Loading` und `Success`, kein Sonderfall.
+*   `isRefreshFailed` in `Success` modelliert den Teilfehler "Daten da, Aktualisierung fehlgeschlagen", also einen Zustand, den eine Exception nie transportieren könnte: Eine geworfene Exception bedeutet immer *"es gibt kein Ergebnis"* und kann "Daten **und** Fehler" prinzipiell nicht ausdrücken.
+*   Das exhaustive `when` zwingt die UI, **jeden** Fehlerzustand zu behandeln. Der Compiler ist unser Sicherheitsnetz.
+
+Das skaliert aber nur, solange "irgendein Fehler" als Information reicht. Sobald die UI unterscheiden muss ("kein Netz" → Retry-Button, "nicht gefunden" → zurück zur Liste, "Session abgelaufen" → Login), brauchen wir **typisierte Fehler**.
+
+### 6.3 Der Ergebnis-Wrapper: Typisierte Fehler
+
+**Die Lösung (sealed Result-Typ):**
+Wir modellieren das Ergebnis einer Operation als geschlossene Typ-Hierarchie, Erfolg *oder* ein konkreter, benannter Fehler:
+
+```kotlin
+// The closed set of errors our data layer can produce
+sealed interface DataError {
+    data object NoConnection : DataError
+    data object NotFound : DataError
+    data class Unexpected(val cause: Throwable) : DataError
+}
+
+// A result is EITHER data OR a typed error - never both, never neither
+sealed interface DataResult<out T> {
+    data class Success<T>(val data: T) : DataResult<T>
+    data class Failure(val error: DataError) : DataResult<Nothing>
+}
+```
+
+Der Aufrufer kann den Fehler nicht mehr vergessen, denn er kommt am Erfolg nur per `when` vorbei, und das `when` ist exhaustiv:
+
+```kotlin
+when (val result = repository.refreshCharacters()) {
+    is DataResult.Success -> { /* ... */ }
+    is DataResult.Failure -> when (result.error) {
+        DataError.NoConnection -> showOfflineBanner()
+        DataError.NotFound -> navigateBack()
+        is DataError.Unexpected -> showGenericError()
+    }
+}
+```
+
+**Und `kotlin.Result`?**
+Die Standardbibliothek bringt `Result<T>` mit (`runCatching { ... }`). Für schnelle interne Zwecke okay, aber der Fehler-Typ ist dort immer nur `Throwable`, also wieder untypisiert. Für Architektur-Grenzen im Enterprise-Umfeld: eigener sealed Typ.
+
+> **Vorsicht, `runCatching`-Falle:**
+> `runCatching` fängt **alle** Throwables, auch die `CancellationException`, die Structured Concurrency am Leben hält (Modul 2.1)! Wer `runCatching` in suspend-Code nutzt, muss Cancellation explizit wieder werfen. Genau deshalb schreiben Enterprise-Projekte sich eine eigene `safeCall`-Hilfsfunktion (siehe Modul 6.4).
+
+### 6.4 Exception-Mapping an der Schicht-Grenze
+
+Die Übersetzung "Exception → typisierter Fehler" passiert an **genau einer Stelle**: der Grenze der Datenschicht. Dahinter existieren nur noch Werte.
+
+```kotlin
+// The ONLY place where network exceptions get caught and translated
+private suspend fun <T> safeCall(block: suspend () -> T): DataResult<T> =
+    try {
+        DataResult.Success(block())
+    } catch (e: CancellationException) {
+        throw e // structured concurrency stays intact!
+    } catch (e: IOException) {
+        DataResult.Failure(DataError.NoConnection)
+    } catch (e: HttpException) {
+        when (e.code()) {
+            404 -> DataResult.Failure(DataError.NotFound)
+            else -> DataResult.Failure(DataError.Unexpected(e))
+        }
+    } catch (e: Exception) {
+        DataResult.Failure(DataError.Unexpected(e))
+    }
+
+suspend fun refreshCharacters(): DataResult<Unit> = safeCall {
+    val favoriteIds = dao.getFavoriteIds().toSet()
+    dao.upsertAll(api.getCharacters().results.map { it.toEntity(it.id in favoriteIds) })
+}
+```
+
+**Wo bleibt unsere App?**
+Unsere zwei Screens unterscheiden bisher nur "Refresh hat (nicht) geklappt": Dafür ist das `isRefreshFailed`-Flag die angemessen kleine Lösung, und dabei bleibt es heute. Der Umbau auf `DataResult` ist die **Herausforderung** am Ende von Tag 2. Die Architektur dafür haben Sie jetzt im Koffer.
+
+> **Dokumentation:** [kotlinlang.org/docs/exceptions.html](https://kotlinlang.org/docs/exceptions.html)
+
+---
+
+## Modul 7: Architektur-konformes Analytics & Logging
+
+### 7.1 Das Problem: Der Tracking-Teppich
+
+Analytics wird in gewachsenen Apps gerne so nachgerüstet:
+
+```kotlin
+class CharacterListViewModel @Inject constructor(...) : ViewModel() {
+    fun toggleFavorite(id: Int) {
+        FirebaseAnalytics.getInstance(context).logEvent("toggle_favorite", ...) // 1, 2, 3 problems
+        viewModelScope.launch { repository.toggleFavorite(id) }
+    }
+}
+```
+
+Drei Probleme in einer Zeile:
+
+1.  **Vendor Lock-in:** Der konkrete Anbieter (Firebase) klebt in jeder Klasse. Ein Anbieterwechsel wird zur Operation am offenen Herzen.
+2.  **Context im ViewModel:** Android-Framework-Typen im ViewModel machen es untestbar auf der JVM.
+3.  **Verantwortung verrutscht:** Das ViewModel verwaltet UI-Zustand; "welcher Screen wurde gesehen" ist gar nicht sein Wissen. Es weiß nicht einmal zuverlässig, ob die UI gerade sichtbar ist.
+
+### 7.2 Die Zuständigkeits-Landkarte
+
+Wir sortieren Observability nach der Frage: **Wessen Wissen ist das?**
+
+| Was | Wessen Wissen? | Wohin? |
+| --- | --- | --- |
+| Screen-Impressions ("List wurde angezeigt") | Nur die UI weiß, was sichtbar ist | **UI-Schicht** (Lifecycle-Nebeneffekt) |
+| User-Events (Klick auf Favorit) | Die UI fängt die Interaktion | **UI-Schicht** (am Interaktionspunkt) |
+| Technisches Logging (Refresh fehlgeschlagen, Cache-Größe) | Nur die Datenschicht kennt ihre Interna | **Datenschicht** (Repository) |
+| **Nichts davon** | – | **ViewModel** bleibt komplett frei! |
+
+Das ViewModel ist die Schnittmenge aller Datenflüsse, und genau deshalb ist es der *verführerischste* und der *falscheste* Ort für Tracking. Bleibt es frei, bleibt es trivial testbar (Modul 8).
+
+### 7.3 Die Schnittstellen: Abstraktion statt Anbieter
+
+Beide Welten bekommen ein schmales Interface, deklariert bei uns, implementiert gegen den jeweiligen Anbieter:
+
+```kotlin
+interface AnalyticsTracker {
+    fun trackScreen(screenName: String)
+    fun trackEvent(name: String, params: Map<String, String> = emptyMap())
+}
+
+interface AppLogger {
+    fun debug(tag: String, message: String)
+    fun error(tag: String, message: String, throwable: Throwable? = null)
+}
+```
+
+**Der Hilt-Baustein dafür ist `@Binds` (Modul 4.2):**
+Für "Interface X wird durch Implementierung Y erfüllt" braucht es kein `@Provides`-Rezept: Hilt kennt das Rezept für `LogcatAnalyticsTracker` ja schon über dessen `@Inject constructor`. Hier in der `abstract class`-Form (die Wirkung ist identisch zur Interface-Form aus Modul 4.2):
+
+```kotlin
+class LogcatAnalyticsTracker @Inject constructor() : AnalyticsTracker { /* Log.i(...) */ }
+
+@Module
+@InstallIn(SingletonComponent::class)
+abstract class AnalyticsModule {
+
+    @Binds
+    @Singleton
+    abstract fun bindAnalyticsTracker(impl: LogcatAnalyticsTracker): AnalyticsTracker
+
+    @Binds
+    @Singleton
+    abstract fun bindAppLogger(impl: LogcatLogger): AppLogger
+}
+```
+
+Im Workshop loggen die Implementierungen nach Logcat. In Produktion tauscht man **nur dieses Modul**: `FirebaseAnalyticsTracker`, `SentryLogger`, und kein einziger Aufrufer ändert sich. Das ist die "Schnittstellen-Entkopplung", die Modularisierung verspricht.
+
+### 7.4 UI-Schicht: Screen-Tracking als Lifecycle-Nebeneffekt
+
+**Warum ein Nebeneffekt (Side Effect)?**
+Composables werden bei jeder State-Änderung neu ausgeführt (Recomposition): Ein `tracker.trackScreen(...)` direkt im Composable-Body würde pro Frame feuern. Ein `LaunchedEffect` läuft dagegen genau **einmal pro Key** (Modul 7.4 des Einführungs-Workshops lässt grüßen): eine Impression pro Screen-Aufruf.
+
+**Wie kommt der Tracker ohne ViewModel in die UI?**
+Über ein `CompositionLocal`: "Umgebungs-Infrastruktur", die einmal ganz oben bereitgestellt wird und überall im UI-Baum verfügbar ist: dasselbe Muster, mit dem `MaterialTheme` seine Farben verteilt.
+
+```kotlin
+// In :core:analytics - a no-op default keeps previews and tests quiet
+val LocalAnalyticsTracker = staticCompositionLocalOf<AnalyticsTracker> { NoOpAnalyticsTracker }
+
+@Composable
+fun TrackScreen(screenName: String) {
+    val tracker = LocalAnalyticsTracker.current
+    // Exactly ONE impression per screen visit, not one per recomposition
+    LaunchedEffect(screenName) {
+        tracker.trackScreen(screenName)
+    }
+}
+```
+
+Der `NoOpAnalyticsTracker` als Default ist eine bewusste Wahl: Previews und Tests laufen damit einfach still weiter. Die Alternative (ein Default, der `error(...)` wirft) würde jeden Zugriff auf `LocalAnalyticsTracker.current` ohne Provider crashen lassen. Für Infrastruktur, die fehlen darf, ist No-Op die robustere Vorgabe.
+
+```kotlin
+// In :app - the ONLY place that knows the real tracker
+@AndroidEntryPoint
+class MainActivity : ComponentActivity() {
+    @Inject lateinit var analyticsTracker: AnalyticsTracker // field injection (Modul 1.2!)
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        // ...
+        setContent {
+            CompositionLocalProvider(LocalAnalyticsTracker provides analyticsTracker) {
+                RickAndMortyTheme { /* NavDisplay ... */ }
+            }
+        }
+    }
+}
+```
+
+```kotlin
+// In the feature - one line per screen, one line per interesting event
+@Composable
+fun CharacterListScreen(...) {
+    TrackScreen("character_list")
+    val tracker = LocalAnalyticsTracker.current
+    // ...
+    CharacterListContent(
+        onFavoriteClick = { id ->
+            tracker.trackEvent("toggle_favorite", mapOf("character_id" to id.toString()))
+            viewModel.toggleFavorite(id)
+        },
+        // ...
+    )
+}
+```
+
+Das ViewModel hat von alldem nichts mitbekommen. Genau so soll es sein.
+
+### 7.5 Datenschicht: Logging hinter der injizierten Schnittstelle
+
+Technisches Logging gehört dorthin, wo die Technik passiert: ins Repository, über den injizierten `AppLogger`:
+
+```kotlin
+@Singleton
+class CharacterRepository @Inject constructor(
+    private val api: RickAndMortyApi,
+    private val dao: CharacterDao,
+    private val logger: AppLogger, // an interface - not android.util.Log!
+) {
+    suspend fun refreshCharacters() {
+        try {
+            val favoriteIds = dao.getFavoriteIds().toSet()
+            val entities = api.getCharacters().results.map { it.toEntity(it.id in favoriteIds) }
+            dao.upsertAll(entities)
+            logger.debug(TAG, "Cached ${entities.size} characters")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Log-and-rethrow: the data layer records the technical detail,
+            // the caller still decides what the failure MEANS
+            logger.error(TAG, "Refreshing characters failed", e)
+            throw e
+        }
+    }
+
+    companion object {
+        private const val TAG = "CharacterRepository"
+    }
+}
+```
+
+Das Muster im `catch`-Block hat einen Namen: **Log-and-Rethrow**. Die Datenschicht protokolliert das technische Detail (Stacktrace, Kontext), wirft den Fehler aber weiter, denn was er *bedeutet*, entscheidet weiterhin der Aufrufer (Modul 6).
+
+**Warum nicht einfach `android.util.Log`?**
+Drei Gründe: Es ist (1) nicht abschaltbar/umleitbar (Produktion will Logs an Crashlytics/Sentry, nicht nach Logcat), (2) statisch (im Unit Test auf der JVM knallt es oder schweigt), und (3) ein Android-Typ in einer Schicht, die sonst framework-frei testbar wäre. Mit dem Interface wird Logging **testbar**: Ein `FakeAppLogger` im Test kann sogar *verifizieren*, dass Fehlerpfade protokolliert werden.
+
+> **Vorsicht, DSGVO:**
+> Logs und Analytics-Events sind Datenabflüsse. Nutzer-IDs, Tokens oder Klartext-Payloads haben in keiner Log-Zeile etwas verloren: Was an Crashlytics/Sentry geht, liegt auf fremden Servern und taucht im Zweifel im Auskunftsersuchen auf. Auch hier zahlt sich das injizierte Interface aus: Die Produktions-Implementierung kann zentral maskieren und filtern, statt auf die Disziplin an hundert einzelnen Log-Aufrufen zu hoffen.
+
+> **Faustregel:**
+> Jede Infrastruktur, die "überall gebraucht wird" (Logging, Analytics, Clock, Feature Flags), verdient ein eigenes schmales Interface in einem eigenen kleinen Core-Modul. Konkrete Anbieter bleiben austauschbare Implementierungsdetails hinter `@Binds`.
+
+---
+
+## Modul 8: Testbarkeit & moderne Testwerkzeuge
+
+### 8.1 Testbare Architektur: Interfaces an den Nahtstellen
+
+**Das Problem:**
+Wir wollen `CharacterListViewModel` auf der JVM testen. Sein Konstruktor verlangt ein `CharacterRepository`, eine **konkrete Klasse**, die Retrofit und Room mitbringt. Ein echtes Repository im ViewModel-Test hieße: Netzwerk und SQLite im Unit Test. Nein.
+
+**Die Lösung (Dependency Inversion):**
+An der Nahtstelle zwischen den Schichten trennen wir Vertrag und Implementierung:
+
+```kotlin
+// The contract - what the ViewModel is allowed to know
+interface CharacterRepository {
+    fun observeCharacters(): Flow<List<Character>>
+    fun observeCharacter(id: Int): Flow<Character?>
+    suspend fun refreshCharacters()
+    suspend fun refreshCharacter(id: Int)
+    suspend fun toggleFavorite(id: Int)
+}
+
+// The implementation - keeps its Retrofit/Room secrets
+@Singleton
+class OfflineFirstCharacterRepository @Inject constructor(...) : CharacterRepository { ... }
+```
+
+Hilt verdrahtet das per `@Binds` (Modul 7.3). Die ViewModels ändern sich **gar nicht**: Sie verlangen weiterhin `CharacterRepository`, bekommen aber je nach Kontext die echte Implementierung (App) oder ein Fake (Test).
+
+Und weil der Vertrag jetzt existiert, holen wir auch das Modul-Upgrade aus **Modul 3.3** nach: `:core:data` wird zum **api/impl-Paar**: Die Features kompilieren fortan nur noch gegen `:core:data:api`, und allein `:app` kennt `:core:data:impl`. Die Dependency Inversion aus diesem Kapitel bekommt damit ihre physische Entsprechung im Modul-Graphen.
+
+> **Faustregel:**
+> Nicht jede Klasse braucht ein Interface! Ein Interface verdient sich seinen Platz an **Schicht-Grenzen** (Repository, Logger, Tracker): dort, wo Austauschbarkeit (Test, Anbieterwechsel, Modul-Grenze) real gebraucht wird. Ein Interface pro Klasse "aus Prinzip" ist Java-EE-Nostalgie.
+
+### 8.2 Fakes statt Mocks
+
+Ein **Fake** ist eine kleine, echte Implementierung des Interfaces (In-Memory statt SQLite). Ein **Mock** ist ein zur Laufzeit generiertes Attrappen-Objekt ("wenn X gerufen wird, antworte Y", z.B. mit MockK).
+
+```kotlin
+class FakeCharacterRepository : CharacterRepository {
+    private val characters = MutableStateFlow<List<Character>>(emptyList())
+    var shouldFailRefresh = false
+
+    override fun observeCharacters(): Flow<List<Character>> = characters
+
+    override suspend fun refreshCharacters() {
+        if (shouldFailRefresh) throw IOException("No network")
+        characters.value = listOf(rick, morty)
+    }
+
+    override suspend fun toggleFavorite(id: Int) {
+        characters.update { list ->
+            list.map { if (it.id == id) it.copy(isFavorite = !it.isFavorite) else it }
+        }
+    }
+    // ...
+}
+```
+
+Warum wir Fakes bevorzugen: Sie verhalten sich wie das Original (ein `MutableStateFlow`-Fake ist *wirklich* reaktiv), sie überleben Refactorings (der Compiler prüft sie), und Tests lesen sich als Verhalten statt als Aufruf-Choreografie. Mocks bleiben nützlich für "wurde genau das aufgerufen?"-Fragen, aber als Ausnahme, nicht als Standard.
+
+### 8.3 Das Main-Dispatcher-Problem
+
+Der erste ViewModel-Test auf der JVM begrüßt uns mit:
+
+```
+IllegalStateException: Module with the Main dispatcher had failed to initialize
+```
+
+`viewModelScope` arbeitet auf `Dispatchers.Main`, und den gibt es nur auf Android, nicht auf der JVM.
+
+**Die Lösung:**
+`kotlinx-coroutines-test` liefert `Dispatchers.setMain(...)` / `Dispatchers.resetMain()`. Damit ersetzt der Test den Main-Dispatcher selbst: vor jedem Test rein, nach jedem Test wieder raus:
+
+```kotlin
+class CharacterListViewModelTest {
+
+    private val testDispatcher = StandardTestDispatcher()
+
+    @Before
+    fun setUp() {
+        Dispatchers.setMain(testDispatcher)
+    }
+
+    @After
+    fun tearDown() {
+        Dispatchers.resetMain() // never leak the fake Main into other tests!
+    }
+}
+```
+
+**Bonus – die JUnit-Rule:**
+Dasselbe `@Before`/`@After`-Paar in jeder Testklasse zu wiederholen ist Copy-Paste, und Copy-Paste haben wir in Modul 3.4 als Drift-Quelle entlarvt. Deshalb bündeln Teams das Setup in einer wiederverwendbaren **JUnit-Rule**:
+
+```kotlin
+class MainDispatcherRule(
+    private val testDispatcher: TestDispatcher = StandardTestDispatcher(),
+) : TestWatcher() {
+    override fun starting(description: Description) = Dispatchers.setMain(testDispatcher)
+    override fun finished(description: Description) = Dispatchers.resetMain()
+}
+```
+
+```kotlin
+class CharacterListViewModelTest {
+    @get:Rule
+    val mainDispatcherRule = MainDispatcherRule()
+    // ...
+}
+```
+
+> **Faustregel:**
+> Die Rule tut nichts anderes als `setMain`/`resetMain`, nur garantiert symmetrisch und in einer Zeile pro Testklasse. In Übung 2.2 schreiben wir beides: erst das Setup selbst, dann die Rule.
+
+### 8.4 Virtuelle Zeit: Tests ohne Warten
+
+`runTest` führt Coroutinen auf einem **TestScheduler** mit virtueller Uhr aus. Der Unterschied zur echten Zeit, in einem Test:
+
+```kotlin
+@Test
+fun `virtual time needs no real waiting`() = runTest {
+    var ready = false
+    launch {
+        delay(5.seconds)             // 5 seconds of "waiting"
+        ready = true
+    }
+
+    assertFalse(ready)               // StandardTestDispatcher: not even started yet
+
+    advanceTimeBy(5.seconds)         // fast-forward the virtual clock
+    runCurrent()                     // run everything that is due NOW
+    assertTrue(ready)
+
+    // currentTime is a Long in millis - the Duration makes the conversion explicit
+    assertEquals(5.seconds.inWholeMilliseconds, currentTime)
+}
+```
+
+Zwei Dinge zeigt dieser Test:
+
+*   **`delay` kostet nichts.** Die Uhr ist virtuell: `delay(5.seconds)` vergeht beim Vorspulen in Mikrosekunden. Kein `Thread.sleep`, kein Flackern in der CI.
+*   **Nichts läuft von allein.** Mit dem **`StandardTestDispatcher`** starten Coroutinen erst, wenn wir die Uhr bewegen: `runCurrent()` ("arbeite ab, was jetzt fällig ist"), `advanceTimeBy(...)` ("spule vor"), `advanceUntilIdle()` ("arbeite alles ab"). Deshalb ist `ready` beim ersten Assert noch `false`: volle Kontrolle über die Reihenfolge, unser Standard. Der **`UnconfinedTestDispatcher`** lässt Coroutinen dagegen sofort loslaufen: bequem, aber die echte Nebenläufigkeit wird wegabstrahiert.
+
+Damit werden reaktive Zustandsübergänge exakt prüfbar: Erst ist der State `Loading`, *dann* bewegen wir die Uhr, *dann* ist er `Success`.
+
+### 8.5 Kalte Flows testen
+
+Ein **kalter** Flow (Modul 2.4) startet für jeden Collector neu: Er produziert seine Werte erst, wenn jemand sammelt. Genau deshalb ist er im Test völlig unkompliziert: Wir sammeln einfach einen endlichen Ausschnitt mit den eingebauten Terminal-Operatoren.
+
+```kotlin
+@Test
+fun `refreshCharacters writes api data into the database`() = runTest {
+    val repository = OfflineFirstCharacterRepository(FakeRickAndMortyApi(), FakeCharacterDao(), FakeAppLogger())
+
+    repository.refreshCharacters()
+
+    val characters = repository.observeCharacters().first() // collect exactly ONE emission
+    assertEquals(2, characters.size)
+}
+```
+
+*   **`first()`** sammelt genau eine Emission und beendet die Collection. Unsere Repository-Tests aus Übung 1.2 machen es seitdem genau so.
+*   **`take(n).toList()`** liefert die ersten n Emissionen als Liste, wenn die Sequenz interessiert.
+*   Für unendliche Flows gilt: niemals `toList()` ohne `take`, sonst sammelt der Test ewig.
+
+### 8.6 Heiße Flows & `stateIn`: Warum der Test einen Subscriber braucht
+
+Beim `StateFlow` unseres ViewModels (**heiß**, via `stateIn`) ist die Lage eine andere, und wer die zwei Stolperfallen nicht kennt, schreibt Tests, die grün sind und nichts prüfen:
+
+**Stolperfalle 1: `stateIn(WhileSubscribed)` startet ohne Collector gar nicht.**
+Die Sharing-Strategie tut im Test exakt das, was sie in Produktion tun soll: Ohne Subscriber wird der Upstream (unser `combine`) **nie gestartet**. `viewModel.uiState.value` bleibt dann für immer der `initialValue`. Jedes Assert dagegen prüft nur `Loading`.
+
+**Stolperfalle 2: `StateFlow` konfliert.**
+Ein StateFlow hält nur den *aktuellen* Wert. Folgen zwei Updates schnell aufeinander, sieht ein Collector den Zwischenwert unter Umständen nie. Wer eine exakte Sequenz erwartet, testet Wunschdenken.
+
+**Die Lösung:** ein (ruhig leerer) Collector im `backgroundScope`, damit `stateIn` den Upstream überhaupt startet; Asserts dann auf `.value`:
+
+```kotlin
+@Test
+fun `state becomes Success after refresh`() = runTest {
+    val viewModel = CharacterListViewModel(FakeCharacterRepository(initial = listOf(rick)))
+
+    // Wake up stateIn(WhileSubscribed): without a subscriber the upstream never starts
+    backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+        viewModel.uiState.collect {}
+    }
+
+    advanceUntilIdle() // virtual clock: run init { refresh() }
+
+    assertTrue(viewModel.uiState.value is CharacterListUiState.Success)
+}
+```
+
+*   **`backgroundScope`** kommt von `runTest`; alles darin wird am Testende automatisch gecancelt. Kein manuelles Job-Aufräumen, kein hängender Test.
+*   **`UnconfinedTestDispatcher(testScheduler)`** lässt den Collector *sofort* starten (mit `StandardTestDispatcher` würde er selbst erst beim nächsten Uhr-Bewegen loslaufen, und Stolperfalle 1 bliebe bestehen).
+*   **Asserts auf `.value`** sind die konflationssichere Wahl: Uns interessiert der aktuelle Zustand, nicht jeder Zwischenschritt.
+*   Interessiert doch die Sequenz, sammelt der Background-Collector stattdessen in eine `mutableListOf()`, mit Stolperfalle 2 im Hinterkopf.
+
+### 8.7 Turbine: Komfort obendrauf
+
+Das `backgroundScope`-Gerüst aus 8.6 wiederholt sich in jedem Test. Die kleine Library **Turbine** (von Cash App) bündelt Subscriber, Sammeln und Aufräumen in einem einzigen Block:
+
+```kotlin
+@Test
+fun `refresh failure keeps cached data and raises the flag`() = runTest {
+    val repository = FakeCharacterRepository(initial = listOf(rick))
+    repository.shouldFailRefresh = true
+    val viewModel = CharacterListViewModel(repository)
+
+    viewModel.uiState.test {                     // collect starts HERE
+        assertEquals(CharacterListUiState.Loading, awaitItem())
+
+        advanceUntilIdle()                        // virtual clock: run init { refresh() }
+
+        val state = assertIs<CharacterListUiState.Success>(expectMostRecentItem())
+        assertEquals(listOf(rick), state.characters)
+        assertTrue(state.isRefreshFailed)
+    }
+}
+```
+
+*   Der `test { }`-Block **ist** der Subscriber: Stolperfalle 1 aus 8.6 ist damit automatisch entschärft.
+*   `awaitItem()` wartet den nächsten Wert ab (mit Timeout statt Endlos-Hänger).
+*   `expectMostRecentItem()` überspringt Zwischenwerte, nur der letzte zählt: Turbines Antwort auf die Konflation (Stolperfalle 2).
+*   `assertIs<...>()` (aus `kotlin-test`): `expectMostRecentItem()` liefert nur den Sealed-Basistyp `CharacterListUiState`; an `characters` kommt man erst, wenn feststeht, dass wirklich `Success` ankam. Ein roher Cast (`as CharacterListUiState.Success`) würde das auch erzwingen, scheitert im Fehlerfall aber mit einer kryptischen `ClassCastException`. `assertIs` schlägt stattdessen mit einer lesbaren Assertion-Meldung fehl und gibt den Wert dank Compiler-Contract gleich als `Success` typisiert zurück, ganz ohne Cast.
+
+> **Faustregel:**
+> Jeder Test folgt *Arrange* (Fake konfigurieren), *Act* (Event auslösen + Uhr bewegen), *Assert* (State prüfen). Wenn ein Test ohne `advanceUntilIdle()` grün ist, testet er wahrscheinlich nur den Initialwert.
+
+> **Dokumentation:** [developer.android.com/kotlin/flow/test](https://developer.android.com/kotlin/flow/test) (Hot vs. Cold, `backgroundScope`-Muster), [developer.android.com/kotlin/coroutines/test](https://developer.android.com/kotlin/coroutines/test) und [github.com/cashapp/turbine](https://github.com/cashapp/turbine)
 
 ---
 
