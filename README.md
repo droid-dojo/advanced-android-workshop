@@ -1,89 +1,105 @@
-# 🧪 Lab 1 – Übung 1.1: Dependency Injection mit Hilt
+# 🧪 Lab 1 – Übung 1.2: Lokaler Daten-Cache & Offline-First Repository (Room)
 
-**Willkommen zum Advanced Android Workshop!**
+Dieser Branch (`lab-1-uebung-1.2`) enthält die **Musterlösung zu Übung 1.1** und ist gleichzeitig der Startpunkt für Übung 1.2.
 
-Ausgangspunkt ist die fertige Rick & Morty App aus dem Einführungs-Workshop. Sie funktioniert, aber sie hat drei Schwachstellen, die wir an Tag 1 beheben: die **manuelle Objekt-Erzeugung** (diese Übung), den **fehlenden Offline-Support** (Übung 1.2) und den **monolithischen Aufbau** (Übung 1.3).
+> 📘 Die Theorie zu dieser Übung finden Sie im [HANDOUT.md](HANDOUT.md), **Modul 5** (Offline-First-Strategien) sowie **Modul 2.4–2.6** (Flow, `combine` & `stateIn`). Die benötigten Dependencies stehen in **Anhang A**.
 
-> 📘 Die Theorie zu dieser Übung finden Sie im [HANDOUT.md](HANDOUT.md), **Modul 4** (Dependency Injection mit Hilt). Die benötigten Dependencies stehen in **Anhang A**.
+---
+
+## ✅ Rückblick: Die Lösung zu Übung 1.1
+
+Das ist neu bzw. anders gegenüber dem `main`-Branch:
+
+* **`RickAndMortyApplication.kt`**: mit `@HiltAndroidApp` annotiert und im Manifest registriert. Hier entsteht der DI-Graph.
+* **`di/NetworkModule.kt`**: die "Rezepte" für `Retrofit` und `RickAndMortyApi` als `@Provides`-Funktionen im `SingletonComponent`.
+* **`CharacterRepository`**: bekommt die Api jetzt per `@Inject constructor` und ist `@Singleton`.
+* **`CharacterListViewModel`**: `@HiltViewModel`, Repository kommt über den Konstruktor. Im Screen: `hiltViewModel()` statt `viewModel()`.
+* **`CharacterDetailViewModel`**: nutzt Assisted Injection. Das Repository liefert Hilt, die `id` kommt zur Laufzeit über die `@AssistedFactory`. Die handgeschriebene `ViewModelProvider.Factory` ist Geschichte.
+* **`Dependencies.kt`**: gelöscht. 🪦
+
+Vergleichen Sie gerne mit Ihrer eigenen Lösung: `git diff main lab-1-uebung-1.2`
 
 ---
 
 ## 🔍 Die Ausgangslage
 
-Werfen Sie einen Blick in `Dependencies.kt`:
+Machen Sie das Experiment: Starten Sie die App einmal mit Internet, schließen Sie sie, aktivieren Sie den **Flugzeugmodus** und starten Sie sie erneut.
 
-```kotlin
-object Dependencies {
-    private val retrofit = Retrofit.Builder()...build()
-    val characterRepository = CharacterRepository(rickAndMortyApi)
-}
-```
-
-Ein globales `object`, aus dem sich die ViewModels ihre Abhängigkeiten selbst holen:
-
-```kotlin
-class CharacterListViewModel : ViewModel() {
-    private val repository: CharacterRepository = Dependencies.characterRepository
-}
-```
-
-Das ist ein **Service Locator**: versteckte Abhängigkeiten, keine Austauschbarkeit in Tests, kein Scoping. In einem modularen Enterprise-Projekt wäre dieses zentrale Objekt der Flaschenhals, den jedes Modul kennen müsste.
+Ergebnis: eine Fehlermeldung. Alle Daten, die wir eben noch hatten, sind weg. Und noch etwas fällt auf: Markieren Sie einen Favoriten und starten Sie die App neu, auch der ist weg, denn er lebt nur im `StateFlow`.
 
 ## 🎯 Das Ziel
 
-Refactoren Sie die App von der manuellen Instanziierung auf eine **deklarative DI-Struktur mit Hilt**:
+Bauen Sie die Datenschicht auf **Offline-First mit Room** um, nach dem **SSOT-Prinzip** (Single Source of Truth):
 
-* Kein `Dependencies.kt` mehr: die Datei wird am Ende **gelöscht**.
-* Jede Klasse deklariert ihre Abhängigkeiten **im Konstruktor** (`@Inject`).
-* Framework-Objekte (Retrofit, Api) werden in einem **Hilt-Modul** bereitgestellt.
-* Die App verhält sich für den User **exakt wie vorher**, reines Refactoring!
+* Die UI beobachtet **ausschließlich die Datenbank** (per `Flow`).
+* Das Netzwerk **schreibt nur noch in die Datenbank**, nie in die UI.
+* Die App startet auch im Flugzeugmodus mit Inhalt (sofern einmal geladen wurde).
+* Favoriten werden persistent gespeichert und überleben App-Neustarts, auch einen Daten-Refresh!
+* Das Offline-Verhalten des Repositories ist mit **Unit-Tests** abgesichert.
 
 ## 🛠 Die Aufgaben im Detail
 
 ### Schritt 1: Dependencies einbinden
 
-Ergänzen Sie `gradle/libs.versions.toml` und `app/build.gradle.kts` um **KSP**, **Hilt** und **hilt-lifecycle-viewmodel-compose** (die fertigen Einträge stehen im [HANDOUT.md, Anhang A](HANDOUT.md#anhang-a-setup--dependencies-für-tag-1)). Danach: Sync!
+Ergänzen Sie **Room** (runtime, ktx, compiler via `ksp`) sowie **JUnit** und **kotlinx-coroutines-test** (die fertigen Einträge stehen im [HANDOUT.md, Anhang A](HANDOUT.md#anhang-a-setup--dependencies-für-tag-1)). Danach: Sync!
 
-### Schritt 2: Hilt aktivieren
+### Schritt 2: Die Datenbank-Schicht
 
-1. Erstellen Sie eine Application-Klasse `RickAndMortyApplication` mit der Annotation `@HiltAndroidApp`.
-2. Registrieren Sie sie im `AndroidManifest.xml` (`android:name`).
-3. Annotieren Sie die `MainActivity` mit `@AndroidEntryPoint`.
+Erstellen Sie im Package `character/data/db`:
 
-### Schritt 3: Das Netzwerk-Modul
+1. **`CharacterEntity`**: die Tabelle (`@Entity`, `@PrimaryKey val id`). Flachen Sie `origin`/`location` bewusst zu Spalten ab (`originId`, `originName`, ...) und vergessen Sie die Spalte `isFavorite` nicht. Schreiben Sie Mapper: `CharacterEntity.toDomain()` und `CharacterDto.toEntity(isFavorite: Boolean)`.
+2. **`CharacterDao`** mit:
+   * `observeAll(): Flow<List<CharacterEntity>>` und `observeById(id): Flow<CharacterEntity?>` (Room feuert automatisch bei jeder Änderung neu!)
+   * `upsertAll(...)` / `upsert(...)` für den Refresh-Pfad
+   * einer Update-Möglichkeit für `isFavorite` und einer Query für die aktuellen Favoriten-IDs
+3. **`RickAndMortyDatabase`**: die `@Database`-Klammer.
+4. **`di/DatabaseModule`**: stellt Datenbank (via `Room.databaseBuilder`, braucht `@ApplicationContext context: Context`) und DAO als `@Singleton` bereit.
 
-Erstellen Sie ein `NetworkModule` (`@Module`, `@InstallIn(SingletonComponent::class)`), das die bisherigen Inhalte von `Dependencies.kt` als `@Provides`-Funktionen bereitstellt:
+### Schritt 3: Das Repository umbauen (SSOT!)
 
-* `Retrofit` (inkl. `Json`-Konfiguration und Converter) als `@Singleton`
-* `RickAndMortyApi` als `@Singleton`
+Trennen Sie Lese- und Schreibpfad strikt:
 
-### Schritt 4: Constructor Injection im Repository
+```kotlin
+fun observeCharacters(): Flow<List<Character>>   // READ:  DB beobachten
+fun observeCharacter(id: Int): Flow<Character?>  // READ:  DB beobachten
+suspend fun refreshCharacters()                  // WRITE: API -> DB
+suspend fun refreshCharacter(id: Int)            // WRITE: API -> DB
+suspend fun toggleFavorite(id: Int)              // WRITE: nur DB
+```
 
-Machen Sie `CharacterRepository` per `@Inject constructor` für Hilt erzeugbar und geben Sie ihm den Scope `@Singleton`.
+**⚠️ Die Denksportaufgabe dabei:** Die API kennt keine Favoriten. Ein naiver `upsert` der API-Antwort würde also bei jedem Refresh alle `isFavorite`-Flags auf `false` zurücksetzen. Sorgen Sie dafür, dass der Refresh die lokalen Favoriten **erhält**.
 
-### Schritt 5: Die ViewModels
+### Schritt 4: Die ViewModels reaktiv machen
 
-1. **`CharacterListViewModel`:** Annotieren Sie es mit `@HiltViewModel` und injizieren Sie das Repository über den Konstruktor. Im `CharacterListScreen` ersetzen Sie `viewModel()` durch `hiltViewModel()`.
-2. **`CharacterDetailViewModel`:** Hier kommt die `id` zur Laufzeit aus der Navigation. Nutzen Sie **Assisted Injection** (`@HiltViewModel(assistedFactory = ...)`, `@AssistedInject`, `@Assisted`, `@AssistedFactory`). Die handgeschriebene `ViewModelProvider.Factory` können Sie ersatzlos streichen. In der `MainActivity` bauen Sie das ViewModel dann über `hiltViewModel(creationCallback = ...)` (siehe Handout, Modul 4.2, Baustein 5).
+1. **`CharacterListViewModel`:** Der `uiState` entsteht jetzt aus dem Datenbank-Flow (`repository.observeCharacters()`), kombiniert mit dem Refresh-Status per `combine` und in die UI gehoben per `stateIn` (siehe Handout 2.5, 2.6 und 5.5) statt aus einem manuell gepflegten `MutableStateFlow`. Der Refresh wird im `init` angestoßen; schlägt er fehl, fliegt **kein** Fehler-Screen rein, solange gecachte Daten da sind.
+2. **UI-State erweitern:** `Success` bekommt ein Flag `isRefreshFailed` (siehe Handout 5.5). Zeigen Sie in dem Fall einen dezenten Hinweis über der Liste (z.B. ein Banner "Offline — Daten evtl. nicht aktuell"). Nur wenn die Datenbank leer ist **und** der Refresh fehlschlägt, zeigen wir den Fehler-Zustand.
+3. **`toggleFavorite`** delegiert nur noch ans Repository, die UI aktualisiert sich von selbst über den Flow. Genau das ist SSOT!
+4. **`CharacterDetailViewModel`:** gleiche Kur, Detail-Daten aus `observeCharacter(id)`, Refresh separat.
 
-### Schritt 6: Aufräumen
+### Schritt 5: Tests schreiben
 
-Löschen Sie `Dependencies.kt`. Wenn das Projekt danach noch kompiliert, haben Sie nichts vergessen. 🎉
+Legen Sie unter `app/src/test/` Unit-Tests für das Repository an (mit `runTest`, siehe Handout 5.6). Schreiben Sie **Fakes** für Api und DAO (kein Mock-Framework nötig) und testen Sie mindestens:
+
+- [ ] `refreshCharacters()` schreibt die API-Daten in die Datenbank.
+- [ ] Schlägt der Refresh fehl (Api wirft `IOException`), bleiben die gecachten Daten über `observeCharacters()` verfügbar.
+- [ ] `toggleFavorite()` persistiert den Favoriten-Status.
+- [ ] Ein Refresh überschreibt vorhandene Favoriten **nicht**.
 
 ## ✅ Definition of Done
 
-- [ ] `Dependencies.kt` existiert nicht mehr.
-- [ ] Kein ViewModel greift mehr auf ein globales Objekt zu, alle Abhängigkeiten stehen im Konstruktor.
-- [ ] Retrofit & Api werden über ein Hilt-Modul bereitgestellt (`@Singleton`).
-- [ ] Beide Screens funktionieren wie vorher (Liste laden, Detail öffnen, Favoriten togglen).
-- [ ] Die App baut ohne Warnungen von Hilt/KSP.
+- [ ] Flugzeugmodus-Test: App neu starten → die zuletzt geladenen Charaktere erscheinen (plus Offline-Hinweis).
+- [ ] Favorit markieren, App killen, neu starten → Favorit ist noch da.
+- [ ] Favorit markieren, Refresh ausführen → Favorit ist noch da.
+- [ ] Die UI liest nirgendwo mehr direkt aus der API.
+- [ ] `./gradlew test` läuft grün.
 
 ## 💡 Tipps
 
-* Arbeiten Sie sich **von unten nach oben** durch den Graphen: erst Modul (Retrofit/Api), dann Repository, dann ViewModels. So bleibt das Projekt zwischendurch möglichst lange kompilierbar.
-* Hilt meldet Verdrahtungsfehler **beim Kompilieren**. Lesen Sie die Fehlermeldung genau, sie benennt fast immer die fehlende Binding-Quelle.
-* `hiltViewModel()` kommt aus `androidx.hilt.lifecycle.viewmodel.compose`, nicht mit `viewModel()` aus `lifecycle-viewmodel-compose` verwechseln.
+* Room-DAOs mit `suspend`/`Flow` sind automatisch main-safe, Sie brauchen nirgendwo `Dispatchers.IO`.
+* Für den Refresh-Pfad bietet sich `@Upsert` an.
+* Für den Fake-DAO im Test eignet sich eine `MutableStateFlow<Map<Int, CharacterEntity>>` als In-Memory-"Tabelle".
+* Denken Sie an `CancellationException` beim Fehlerbehandeln im ViewModel (Handout 2.1)!
 
 ---
 
-**Fertig?** Die Musterlösung, und damit die Aufgabenstellung für **Übung 1.2 (Offline-First mit Room)**, finden Sie im Branch `lab-1-uebung-1.2`.
+**Fertig?** Die Musterlösung, und damit die Aufgabenstellung für **Übung 1.3 (Modularisierung)**, finden Sie im Branch `lab-1-uebung-1.3`.
