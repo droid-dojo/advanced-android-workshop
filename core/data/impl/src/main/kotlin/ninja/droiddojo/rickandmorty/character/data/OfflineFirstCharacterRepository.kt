@@ -12,20 +12,19 @@ import ninja.droiddojo.rickandmorty.character.data.db.toDomain
 import ninja.droiddojo.rickandmorty.character.data.db.toEntity
 
 @Singleton
-class CharacterRepository @Inject constructor(
+class OfflineFirstCharacterRepository @Inject constructor(
     private val api: RickAndMortyApi,
     private val dao: CharacterDao,
     private val logger: AppLogger,
-) {
-    // READ path: observe the database, the single source of truth
-    fun observeCharacters(): Flow<List<Character>> =
+) : CharacterRepository {
+
+    override fun observeCharacters(): Flow<List<Character>> =
         dao.observeAll().map { entities -> entities.map { it.toDomain() } }
 
-    fun observeCharacter(id: Int): Flow<Character?> =
+    override fun observeCharacter(id: Int): Flow<Character?> =
         dao.observeById(id).map { it?.toDomain() }
 
-    // WRITE path: network -> database, never network -> UI
-    suspend fun refreshCharacters() {
+    override suspend fun refreshCharacters() {
         try {
             // The API knows nothing about favorites: keep the local flags alive
             val favoriteIds = dao.getFavoriteIds().toSet()
@@ -44,7 +43,7 @@ class CharacterRepository @Inject constructor(
         }
     }
 
-    suspend fun refreshCharacter(id: Int) {
+    override suspend fun refreshCharacter(id: Int) {
         try {
             val favoriteIds = dao.getFavoriteIds().toSet()
             dao.upsert(api.getCharacter(id).toEntity(isFavorite = id in favoriteIds))
@@ -57,11 +56,11 @@ class CharacterRepository @Inject constructor(
         }
     }
 
-    suspend fun toggleFavorite(id: Int) {
+    override suspend fun toggleFavorite(id: Int) {
         dao.toggleFavorite(id)
     }
 
     companion object {
-        private const val TAG = "CharacterRepository"
+        private const val TAG = "OfflineFirstCharacterRepository"
     }
 }

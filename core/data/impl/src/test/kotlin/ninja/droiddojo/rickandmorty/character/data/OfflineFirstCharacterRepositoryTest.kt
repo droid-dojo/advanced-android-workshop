@@ -11,7 +11,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class CharacterRepositoryTest {
+class OfflineFirstCharacterRepositoryTest {
 
     private val rickDto = characterDto(id = 1, name = "Rick Sanchez")
     private val mortyDto = characterDto(id = 2, name = "Morty Smith")
@@ -20,7 +20,7 @@ class CharacterRepositoryTest {
     fun `refreshCharacters writes api data into the database`() = runTest {
         val api = FakeRickAndMortyApi(characters = listOf(rickDto, mortyDto))
         val dao = FakeCharacterDao()
-        val repository = CharacterRepository(api, dao, FakeAppLogger())
+        val repository = OfflineFirstCharacterRepository(api, dao, FakeAppLogger())
 
         repository.refreshCharacters()
 
@@ -32,7 +32,7 @@ class CharacterRepositoryTest {
     fun `failed refresh keeps cached data available`() = runTest {
         val api = FakeRickAndMortyApi(failing = true)
         val dao = FakeCharacterDao(initial = listOf(characterEntity(id = 1, name = "Rick Sanchez")))
-        val repository = CharacterRepository(api, dao, FakeAppLogger())
+        val repository = OfflineFirstCharacterRepository(api, dao, FakeAppLogger())
 
         val error = runCatching { repository.refreshCharacters() }.exceptionOrNull()
         assertTrue(error is IOException)
@@ -44,7 +44,7 @@ class CharacterRepositoryTest {
     @Test
     fun `toggleFavorite persists the favorite state`() = runTest {
         val dao = FakeCharacterDao(initial = listOf(characterEntity(id = 1, name = "Rick Sanchez")))
-        val repository = CharacterRepository(FakeRickAndMortyApi(), dao, FakeAppLogger())
+        val repository = OfflineFirstCharacterRepository(FakeRickAndMortyApi(), dao, FakeAppLogger())
 
         repository.toggleFavorite(1)
 
@@ -59,7 +59,7 @@ class CharacterRepositoryTest {
     fun `refresh does not overwrite local favorites`() = runTest {
         val api = FakeRickAndMortyApi(characters = listOf(rickDto, mortyDto))
         val dao = FakeCharacterDao()
-        val repository = CharacterRepository(api, dao, FakeAppLogger())
+        val repository = OfflineFirstCharacterRepository(api, dao, FakeAppLogger())
 
         repository.refreshCharacters()
         repository.toggleFavorite(1)
@@ -75,12 +75,12 @@ class CharacterRepositoryTest {
     fun `failed refresh is logged as error`() = runTest {
         val api = FakeRickAndMortyApi(failing = true)
         val logger = FakeAppLogger()
-        val repository = CharacterRepository(api, FakeCharacterDao(), logger)
+        val repository = OfflineFirstCharacterRepository(api, FakeCharacterDao(), logger)
 
         runCatching { repository.refreshCharacters() }
 
         val entry = logger.errorEntries.single()
-        assertEquals("CharacterRepository", entry.tag)
+        assertEquals("OfflineFirstCharacterRepository", entry.tag)
         assertTrue(entry.throwable is IOException)
     }
 
@@ -89,7 +89,7 @@ class CharacterRepositoryTest {
         val renamedRick = characterDto(id = 1, name = "Pickle Rick")
         val api = FakeRickAndMortyApi(characters = listOf(renamedRick))
         val dao = FakeCharacterDao(initial = listOf(characterEntity(id = 1, name = "Rick Sanchez")))
-        val repository = CharacterRepository(api, dao, FakeAppLogger())
+        val repository = OfflineFirstCharacterRepository(api, dao, FakeAppLogger())
 
         repository.refreshCharacter(1)
 

@@ -43,6 +43,7 @@ dependencies {
     implementation(projects.core.ui)
     implementation(projects.core.analytics.api)
     implementation(projects.core.analytics.impl)
+    implementation(projects.core.data.impl)
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

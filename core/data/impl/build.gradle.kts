@@ -6,12 +6,12 @@ plugins {
 }
 
 android {
-    namespace = "ninja.droiddojo.rickandmorty.core.data"
+    namespace = "ninja.droiddojo.rickandmorty.core.data.impl"
 }
 
 dependencies {
-    // Character & Place appear in the repository's public API -> api, not implementation
-    api(projects.core.model)
+    // The implemented contract appears in this module's public signatures -> api
+    api(projects.core.data.api)
     implementation(projects.core.analytics.api)
 
     implementation(libs.kotlinx.serialization.json)

@@ -8,5 +8,5 @@ android {
 
 dependencies {
     // only what THIS module specifically needs
-    implementation(projects.core.data)
+    implementation(projects.core.data.api)
 }

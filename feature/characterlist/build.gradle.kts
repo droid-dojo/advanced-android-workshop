@@ -8,5 +8,10 @@ android {
 
 dependencies {
     // only what THIS module specifically needs
-    implementation(projects.core.data)
+    implementation(projects.core.data.api)
+
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.turbine)
+    testImplementation(libs.kotlin.test)
 }
