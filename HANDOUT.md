@@ -1675,6 +1675,783 @@ fun `refresh failure keeps cached data and raises the flag`() = runTest {
 
 ---
 
+# Tag 3: UI-Testing auf der JVM, Screenshot-Tests, Enterprise Security & CI
+
+Willkommen zum Finale! Tag 2 endete mit einer vollständig getesteten ViewModel-Schicht. Heute klettern wir die letzte Stufe der Test-Pyramide hinauf, zur **UI selbst**, und zwar ohne einen einzigen Emulator zu starten. Zum Abschluss härten wir die App für den Enterprise-Einsatz: verschlüsselte Gerätekonfiguration und abgesicherte Netzwerk-Kommunikation.
+
+### Die Agenda für Tag 3
+
+| Block | Thema |
+| --- | --- |
+| Theorie | Deklaratives UI-Testing: Der Semantics Tree (Modul 9) |
+| Theorie | UI- & Screenshot-Tests auf der JVM (Modul 10) |
+| Theorie | Enterprise Security: Keystore, DataStore & Pinning (Modul 11) |
+| Theorie | Continuous Integration: Stages, Pipelines & GitHub Actions (Modul 12) |
+| **Praxis** | **Übung 3.1:** Funktionale UI-Tests auf der JVM |
+| **Praxis** | **Übung 3.2:** Visuelle Regressionstests (Roborazzi oder das neue offizielle Preview-Tool) |
+| **Praxis** | **Übung 3.3:** Verschlüsselte POS-Konfiguration |
+
+### Setup für Tag 3
+
+```toml
+[versions]
+# ... existing versions ...
+robolectric = "4.16.1"
+androidxTestExt = "1.3.0"
+roborazzi = "1.72.0"
+datastore = "1.2.1"
+
+[libraries]
+# ... existing libraries ...
+
+# Übung 3.1: UI-Tests auf der JVM
+androidx-compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
+androidx-compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
+robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
+androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestExt" }
+
+# Übung 3.2: Screenshot-Tests (Roborazzi)
+roborazzi = { group = "io.github.takahirom.roborazzi", name = "roborazzi", version.ref = "roborazzi" }
+roborazzi-compose = { group = "io.github.takahirom.roborazzi", name = "roborazzi-compose", version.ref = "roborazzi" }
+
+# Übung 3.3: Verschlüsselte POS-Konfiguration
+androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
+
+[plugins]
+# ... existing plugins ...
+roborazzi = { id = "io.github.takahirom.roborazzi", version.ref = "roborazzi" }
+```
+
+Das Roborazzi-Plugin gehört (wie alle Plugins) zusätzlich mit `apply false` in die Root-`build.gradle.kts`. Im Feature-Modul dann:
+
+```kotlin
+// feature/characterlist/build.gradle.kts
+plugins {
+    // ... existing plugins ...
+    alias(libs.plugins.roborazzi) // Übung 3.2
+}
+
+android {
+    // ...
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true // Robolectric needs the resources
+        }
+    }
+}
+
+dependencies {
+    // ... existing dependencies ...
+
+    // Übung 3.1: functional UI tests on the JVM
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    testImplementation(libs.androidx.compose.ui.test.manifest)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.ext.junit)
+
+    // Übung 3.2: screenshot tests
+    testImplementation(libs.roborazzi)
+    testImplementation(libs.roborazzi.compose)
+}
+```
+
+*(Das Setup für das experimentelle offizielle Preview-Screenshot-Tool, die Alternative in Übung 3.2, steht im Ausblick-Kasten in Modul 10.4.)*
+
+---
+
+## Modul 9: Deklaratives UI-Testing – Der Semantics Tree
+
+### 9.1 Was testen wir hier eigentlich?
+
+Unsere Test-Pyramide ist von unten nach oben gewachsen: Repository-Tests (Tag 1), ViewModel-Tests (Tag 2). Was fehlt, ist die oberste Schicht: **Zeigt die UI den richtigen Zustand an, und lösen Interaktionen die richtigen Events aus?**
+
+Genau das ist die UDF-Frage aus Modul 2.7, nur von der anderen Seite: Wir geben einen **State** hinein und prüfen das Gezeichnete; wir klicken und prüfen das **Event**. Die Logik dazwischen (ViewModel, Repository) ist schon getestet, die UI-Tests dürfen also klein und fokussiert bleiben.
+
+**Und womit greift ein Test auf die UI zu?** Über den **Semantics Tree**: Compose pflegt neben dem, was gezeichnet wird, eine zweite Beschreibung der Oberfläche. Sie beschreibt nicht, *wie* etwas aussieht, sondern *was es bedeutet*: "hier steht der Text 'Rick Sanchez'", "dieses Element ist klickbar", "das hier ist ein Bild". Tests finden, prüfen und bedienen die UI ausschließlich über diese Bedeutungs-Schicht.
+
+### 9.2 Der Semantics Tree: Eine UI, zwei Konsumenten
+
+Der Bedeutungs-Baum aus 9.1 hat dabei **zwei** Konsumenten:
+
+1. **Accessibility-Dienste** (TalkBack liest ihn vor),
+2. **Tests** (Finder und Assertions arbeiten ausschließlich auf ihm).
+
+Das ist ein wunderbarer Doppelnutzen: **Wer seine App testbar macht, macht sie gleichzeitig barrierefrei**, und umgekehrt. Die zwei wichtigsten Werkzeuge, um Semantik explizit zu machen:
+
+```kotlin
+// 1. contentDescription: meaning for humans AND tests
+Icon(
+    imageVector = Icons.Default.FavoriteBorder,
+    contentDescription = "Add to favorites", // TalkBack reads this, tests find it
+)
+
+// 2. testTag: meaning ONLY for tests (invisible to accessibility)
+CircularProgressIndicator(
+    modifier = Modifier.testTag("loading_indicator"), // nothing to "read" here
+)
+```
+
+> **Faustregel:**
+> Erst `contentDescription` (hilft Usern *und* Tests), nur wo es keine sinnvolle Beschreibung gibt (Spinner, Container) ein `testTag`. Wer nur mit testTags testet, testet an der Accessibility vorbei.
+
+### 9.3 Die Test-API: Finden, Prüfen, Interagieren
+
+Jeder Compose-UI-Test besteht aus drei Bausteinen auf der `ComposeTestRule`:
+
+```kotlin
+class CharacterListScreenTest {
+
+    @get:Rule
+    val composeTestRule = createComposeRule()
+
+    @Test
+    fun `success state shows the characters`() {
+        // Arrange: set ANY composable as content, with a fixed state
+        composeTestRule.setContent {
+            CharacterListContent(
+                state = CharacterListUiState.Success(listOf(rick)),
+                onFavoriteClick = {},
+                onCharacterClick = {},
+            )
+        }
+
+        // Finder + Assertion
+        composeTestRule.onNodeWithText("Rick Sanchez").assertIsDisplayed()
+    }
+
+    @Test
+    fun `clicking a character emits its id`() {
+        var clickedId: Int? = null
+        composeTestRule.setContent {
+            CharacterListContent(
+                state = CharacterListUiState.Success(listOf(rick)),
+                onFavoriteClick = {},
+                onCharacterClick = { clickedId = it },
+            )
+        }
+
+        // Action + verify the EVENT, not the navigation (that's :app's job)
+        composeTestRule.onNodeWithText("Rick Sanchez").performClick()
+        assertEquals(rick.id, clickedId)
+    }
+}
+```
+
+Die wichtigsten Vertreter der drei Familien:
+
+| Familie | Beispiele |
+| --- | --- |
+| **Finder** | `onNodeWithText`, `onNodeWithContentDescription`, `onNodeWithTag`, `onAllNodesWith...` |
+| **Assertions** | `assertIsDisplayed`, `assertDoesNotExist`, `assertIsEnabled`, `assertCountEquals` |
+| **Actions** | `performClick`, `performTextInput`, `performScrollTo`, `performTouchInput` |
+
+> **Debugging-Tipp:**
+> `composeTestRule.onRoot().printToLog("TREE")` druckt den kompletten Semantics Tree: die erste Anlaufstelle, wenn ein Finder nichts findet.
+
+> **Die Stolperfalle Nr. 1 in der Praxis – der Merged Tree:**
+> Für die Accessibility *verschmilzt* Compose Semantik: Ein klickbarer Listeneintrag meldet sich als **ein** Knoten, die Semantik seiner Kinder geht darin auf. Finder arbeiten per Default auf genau diesem *merged tree*: Ein `testTag` oder eine `contentDescription` auf einem Kind-Element (etwa dem Icon *im* Button) ist dort schlicht nicht mehr einzeln adressierbar, der Finder findet "grundlos" nichts, obwohl das Element sichtbar ist. Die Lösung: `onNodeWithTag("...", useUnmergedTree = true)`, und zum Nachsehen `onRoot(useUnmergedTree = true).printToLog("TREE")`, das beide Welten sichtbar macht.
+
+### 9.4 Warum sich State Hoisting jetzt doppelt auszahlt
+
+Beachten Sie, **was** wir in 9.3 testen: `CharacterListContent`, das zustandslose Composable, nicht den Screen mit ViewModel. Wir geben feste Zustände hinein und prüfen Darstellung und Events. Kein Hilt, kein Fake-Repository, keine Coroutinen: Die haben wir eine Etage tiefer schon getestet.
+
+Das funktioniert nur, weil wir seit Tag 1 konsequent **State Hoisting** betreiben: Die `Content`-Composables sind reine Funktionen `State -> UI`. Einziger Haken: `CharacterListContent` ist bisher `private`; für die Testbarkeit lockern wir das auf **`internal`** (sichtbar im Modul, unsichtbar für andere Module: Die Modul-Grenze aus Übung 1.3 bleibt intakt!). Testbarkeit heißt also nicht, Kapselung aufzugeben: `internal` gibt dem Test genau so viel Sichtbarkeit wie nötig und keinem anderen Modul mehr als vorher.
+
+---
+
+## Modul 10: UI- & Screenshot-Tests auf der JVM
+
+### 10.1 Das Emulator-Problem – und die Robolectric-Antwort
+
+UI-Tests liefen klassisch als **Instrumented Tests** (`androidTest/`) auf Emulator oder Gerät: minutenlanges Booten, Flakiness, teure CI-Runner mit Virtualisierung. Für schnelle Feedback-Zyklen ist das Gift.
+
+**Robolectric** simuliert das Android-Framework direkt **auf der JVM**: Unsere UI-Tests aus Modul 9 liegen in `src/test/` (nicht `androidTest/`!) und laufen mit den normalen Unit-Tests: in Sekunden, in jeder CI-Pipeline, ohne Emulator.
+
+```kotlin
+@RunWith(AndroidJUnit4::class) // androidx.test.ext.junit.runners.AndroidJUnit4
+class CharacterListScreenTest {
+    @get:Rule
+    val composeTestRule = createComposeRule()
+    // ... exactly the tests from Modul 9 - same API!
+}
+```
+
+`AndroidJUnit4` (aus `androidx.test.ext:junit`) ist **ein** Runner für beide Welten: Auf der JVM delegiert er an Robolectric, auf dem Gerät an die Instrumentation. Die Testklasse selbst trägt dadurch **keine einzige Robolectric-Annotation**: Ein später doch nötiger Emulator-Test (z.B. für echtes Geräteverhalten) ist buchstäblich Copy-Paste nach `androidTest/`. Die Tests sind damit nicht auf ein Werkzeug festgeschrieben: Der Testcode kennt nur die Compose-Test-API; ob darunter Robolectric oder ein echtes Gerät liegt, entscheidet allein der Ort des Source Sets.
+
+Robolectric selbst wird einmal zentral konfiguriert, für alle Tests des Moduls:
+
+```properties
+# src/test/resources/robolectric.properties
+sdk=36
+graphicsMode=NATIVE
+```
+
+*   `sdk=36`: Robolectric hinkt den allerneuesten Android-APIs naturgemäß etwas hinterher (aktuell: maximal API 36). Da unser `compileSdk` schon auf 37 steht, würde der SDK-Picker sonst mit `Package targetSdkVersion=37 > maxSdkVersion=36` abbrechen; wir pinnen das simulierte API-Level deshalb zentral. (Pro Klasse ginge das auch per `@Config(sdk = [36])`, aber das ist genau die Art Wiederholung, die wir vermeiden.)
+*   `graphicsMode=NATIVE`: Robolectric rendert mit echten nativen Grafik-Routinen statt Attrappen: Voraussetzung für verlässliche Compose-Tests und Pflicht für Screenshots (Modul 10.3).
+*   `isIncludeAndroidResources = true` in den `testOptions`: gibt Robolectric Zugriff auf die Ressourcen des Moduls.
+
+> **Ehrlichkeit gehört dazu:** Robolectric ist eine Simulation. Gesten-Feinheiten, echte Fenster-Insets oder Hersteller-Eigenheiten testet nur ein echtes Gerät. Faustregel: **funktionale UI-Logik auf der JVM, Geräte-Spezifika im (kleinen!) Instrumented-Suite.**
+
+### 10.2 Screenshot-Testing: Das Sicherheitsnetz für Layouts
+
+Funktionale Tests prüfen *dass* der Name angezeigt wird, nicht *wie*. Ob ein Padding-Refactoring das Layout zerschossen hat, ob der Dark Mode noch lesbar ist, ob der lange Charaktername jetzt umbricht: Das sieht kein `assertIsDisplayed`.
+
+**Screenshot-Tests (visuelle Regressionstests)** lösen das mit einem Drei-Schritt-Workflow:
+
+1.  **Record:** Ein Golden Image (Referenz-PNG) pro Testfall aufnehmen und **ins Git einchecken**.
+2.  **Verify:** Bei jedem Testlauf wird neu gerendert und **pixelgenau** gegen das Golden verglichen. Abweichung = roter Test + Diff-Bild.
+3.  **Review & Re-Record:** Ist die Abweichung gewollt (neues Design), nimmt man neue Goldens auf, und der Diff wird im Code-Review sichtbar wie jede andere Änderung.
+
+### 10.3 Roborazzi: Screenshots auf der JVM
+
+Der De-facto-Standard für Compose-Screenshot-Tests auf der JVM ist **Roborazzi**. Es setzt direkt auf unserem Robolectric-Setup aus 10.1 auf (NATIVE-Graphics!): Jeder Compose-UI-Test wird mit einer Zeile zum Screenshot-Test:
+
+```kotlin
+@RunWith(AndroidJUnit4::class) // Robolectric config comes from robolectric.properties (10.1)
+class CharacterListScreenshotTest {
+
+    @get:Rule
+    val composeTestRule = createComposeRule()
+
+    @Test
+    fun characterList_success() {
+        composeTestRule.setContent {
+            ScreenshotContainer { // theme + deterministic image placeholders (see below)
+                CharacterListContent(
+                    state = CharacterListUiState.Success(CharacterSampleData.fakeCharacters),
+                    onFavoriteClick = {},
+                    onCharacterClick = {},
+                )
+            }
+        }
+
+        composeTestRule.onRoot().captureRoboImage() // <- that's the screenshot
+    }
+}
+```
+
+Weil Roborazzi in gewöhnlichen UI-Tests lebt, kann es auch **Zustände nach Interaktionen** festhalten: erst `performClick()`, dann `captureRoboImage()`. Den Record/Verify-Workflow steuern die Gradle-Tasks des Roborazzi-Plugins:
+
+```bash
+./gradlew recordRoborazziDebug   # take/refresh the golden images
+./gradlew verifyRoborazziDebug   # render anew + compare -> fails on diff
+./gradlew compareRoborazziDebug  # generate diff images without failing the build
+```
+
+*   Die Goldens landen (per Konvention) im Modul unter `src/test/screenshots/` (Speicherort und Vergleichs-Toleranz sind über den `roborazzi { }`-Block im Buildfile konfigurierbar) und werden **ins Git eingecheckt**: Sie sind die dokumentierte Wahrheit des Designs.
+*   Bei Abweichungen erzeugt `verify` ein Diff-Bild (Referenz | Ist | Unterschied) unter `build/outputs/roborazzi/`, perfekt als CI-Artefakt.
+
+**Determinismus ist alles:**
+Ein Screenshot-Test, der bei jedem Lauf anders aussieht, ist wertlos. Die zwei üblichen Störenfriede:
+
+1.  **Netzwerk-Bilder:** Coil würde im Test echte Requests starten: mal da, mal nicht. Im *Inspection Mode* ersetzt der `AsyncImagePreviewHandler` aus unserem `PreviewContainer` alle Bilder durch Farbflächen; für Studio-Previews reicht das. Die Screenshot-Tests gehen einen Schritt weiter: Sie laden ein **echtes Bild aus den Test-Ressourcen**. Genauso deterministisch (lokale Datei, kein Netz), aber der Screenshot deckt damit auch echtes Bitmap-Decoding und die Skalierung im Layout ab:
+
+    ```kotlin
+    @OptIn(ExperimentalCoilApi::class)
+    @Composable
+    fun ScreenshotContainer(darkTheme: Boolean = false, content: @Composable () -> Unit) {
+        val context = LocalContext.current
+        // a real drawable from src/test/res - deterministic, but a real bitmap
+        val previewHandler = AsyncImagePreviewHandler {
+            context.getDrawable(R.drawable.preview_character)!!.asImage()
+        }
+        CompositionLocalProvider(LocalInspectionMode provides true) {
+            PreviewContainer(darkTheme = darkTheme) {
+                CompositionLocalProvider(LocalAsyncImagePreviewHandler provides previewHandler) {
+                    content()
+                }
+            }
+        }
+    }
+    ```
+
+2.  **Zeit & Zufall:** Uhrzeiten, animierte Zustände und `random()` gehören in Screenshot-Tests eingefroren.
+
+3.  **Die Render-Umgebung selbst:** Fonts und Text-Rendering unterscheiden sich zwischen macOS-Entwicklerrechner und Linux-CI-Runner um wenige Pixel, genug für einen pixelgenauen Vergleich. Das ist *der* klassische Screenshot-Frust: lokal grün, CI rot, und das Diff-Bild zeigt scheinbar nichts. Die Konsequenz: **Goldens entstehen in genau einer Referenz-Umgebung**: Entweder recordet die CI selbst (eigener manueller Record-Job, der die Bilder committet), oder das Team recordet in einem Container, der der CI gleicht. Daraus folgt auch die Arbeitsteilung: `record` läuft nur bewusst und manuell, `verify` ist das automatische Pflicht-Gate in der Pipeline (Modul 12).
+
+> **Faustregel:**
+> **Semantik-Tests für Verhalten, Screenshots für Aussehen.** Ein Screenshot-Test pro visuell eigenständigem Zustand (Loading, Success, Error, Offline-Banner, jeweils Light/Dark), nicht einer pro Codezeile.
+
+### 10.4 Die Zukunft: Compose Preview Screenshot Testing
+
+> [!NOTE]
+> **Ausblick – das offizielle Werkzeug (noch Alpha):** Google baut ein eigenes Screenshot-Testing-Tool. Die Idee ist bestechend einfach: **Unsere `@Preview`-Composables werden selbst zu Screenshot-Tests.** Wir pflegen sie ohnehin für jeden UI-Zustand, mehr braucht das Tool nicht.
+>
+> Drei Eigenschaften machen den Ansatz attraktiv:
+>
+> *   Gerendert wird auf dem Host mit **Layoutlib**, derselben Engine wie die Studio-Preview. Was Sie in der Preview sehen, *ist* das Golden.
+> *   Previews laufen im Inspection Mode: Determinismus ist eingebaut.
+> *   Multi-Previews wie `@PreviewLightDark` erzeugen mehrere Goldens auf einen Schlag.
+>
+> Die Tests leben in einem eigenen Source Set `src/screenshotTest/`:
+>
+> ```kotlin
+> class CharacterListScreenshots {
+>     @PreviewTest // <- turns this preview into a screenshot test
+>     @PreviewLightDark
+>     @Composable
+>     fun CharacterListSuccess() {
+>         PreviewContainer {
+>             CharacterListContent(state = /* ... */, onFavoriteClick = {}, onCharacterClick = {})
+>         }
+>     }
+> }
+> ```
+>
+> **Das Setup, drei Schritte:**
+>
+> 1.  Plugin `com.android.compose.screenshot` (aktuell `0.0.1-alpha16`) im Feature-Modul anwenden.
+> 2.  Zwei Dependencies als `screenshotTestImplementation`: `com.android.tools.screenshot:screenshot-validation-api` und `ui-tooling`.
+> 3.  Das Flag `android.experimental.enableScreenshotTest=true` in die `gradle.properties`.
+>
+> **Der Workflow:**
+>
+> *   `./gradlew updateDebugScreenshotTest` nimmt Referenzbilder auf.
+> *   `./gradlew validateDebugScreenshotTest` prüft sie. HTML-Report: `build/reports/screenshotTest/preview/`.
+>
+> **Warum "Zukunft" und nicht "heute"?** Das Tool ist Alpha und braucht ein experimentelles Flag. Und es fehlen Dinge, die Roborazzi kann: Screenshots *nach Interaktionen*, konfigurierbare Pixel-Toleranzen, freie Capture-Punkte mitten im Test. Konzeptionell (Golden Images, Record/Verify, Diff-Report) ist es aber identisch zu allem aus 10.3. Die Musterlösung von Übung 3.2 enthält **beide** Varianten: Vergleichen Sie die Workflows direkt im Code.
+
+> **Dokumentation:** [github.com/takahirom/roborazzi](https://github.com/takahirom/roborazzi), [developer.android.com/training/testing/ui-tests/screenshot](https://developer.android.com/training/testing/ui-tests/screenshot) und [developer.android.com/studio/preview/compose-screenshot-testing](https://developer.android.com/studio/preview/compose-screenshot-testing)
+
+---
+
+## Modul 11: Enterprise Security
+
+### 11.1 Das Bedrohungsmodell: Das Gerät in fremden Händen
+
+Im POS-Umfeld (Kassen, Terminals, Außendienst-Geräte) ist die zentrale Annahme: **Das Gerät kann physisch in falsche Hände geraten.** Sensible Konfiguration (Terminal-IDs, API-Schlüssel, Händler-Zugänge) darf dann nicht als Klartext auslesbar sein. (Zur Begriffsklärung: Das POS-Umfeld ist unser Szenario; das konkrete Datenpaket, das jedes Gerät bekommt, ist seine Terminal-Konfiguration, im Code `TerminalConfig`.) `SharedPreferences` als XML-Klartext im App-Verzeichnis fällt damit aus, denn ein gerootetes Gerät liest die Datei in zehn Sekunden aus.
+
+Zwei Verteidigungslinien schauen wir uns an: **Daten im Ruhezustand** (Verschlüsselung mit Hardware-Schlüsseln) und **Daten unterwegs** (Certificate Pinning).
+
+### 11.2 Android Keystore: Schlüssel, die die Hardware nie verlassen
+
+Der **Android Keystore** erzeugt und verwahrt kryptografische Schlüssel in einer geschützten Umgebung (TEE, Trusted Execution Environment; auf neueren Geräten sogar ein dedizierter **StrongBox**-Chip). Der entscheidende Punkt:
+
+> Das Schlüsselmaterial verlässt die Hardware **nie**. Die App sagt "verschlüssele das mit Schlüssel X" und bekommt das Ergebnis, aber niemals den Schlüssel. Selbst ein Angreifer mit Root-Zugriff kann den Schlüssel nicht exportieren, nur (solange er auf dem Gerät ist) benutzen.
+
+Wichtig fürs Bedrohungsmodell: Das schützt nicht gegen *Benutzung* auf dem kompromittierten Gerät, sondern gegen **Exfiltration**. Der Schlüssel lässt sich nicht kopieren, nicht im Backup abziehen und nicht auf einem anderen Rechner verwenden.
+
+```kotlin
+// Create (once) a hardware-backed AES key
+val keyGenerator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+keyGenerator.init(
+    KeyGenParameterSpec.Builder("terminal_config_key", KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+        .setBlockModes(KeyProperties.BLOCK_MODE_GCM)          // AES/GCM: encrypts AND authenticates
+        .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+        .build()
+)
+keyGenerator.generateKey()
+```
+
+*Randnotiz zur StrongBox: Der dedizierte Chip ist optionale Hardware. Wer ihn mit `setIsStrongBoxBacked(true)` explizit anfordert, muss die `StrongBoxUnavailableException` abfangen und auf die TEE-Variante zurückfallen, denn nicht jedes Gerät hat ihn. Ohne die Anforderung wählt das System selbst die beste verfügbare Umgebung.*
+
+Und so wird der Schlüssel **benutzt**: über die ganz normale `Cipher`-API, nur dass der Schlüssel eben aus dem Keystore kommt (genau so steht es in `KeystoreSettingsCipher` der Musterlösung):
+
+```kotlin
+private fun getOrCreateKey(): SecretKey {
+    val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+    (keyStore.getKey("terminal_config_key", null) as? SecretKey)?.let { return it }
+    return /* generateKey() from above - create once, reuse forever */
+}
+
+fun encrypt(plaintext: ByteArray): ByteArray {
+    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+    cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey()) // fresh random IV per call
+    return cipher.iv + cipher.doFinal(plaintext)       // prepend IV to ciphertext
+}
+
+fun decrypt(ciphertext: ByteArray): ByteArray {
+    val iv = ciphertext.copyOfRange(0, 12)             // GCM-IV: 12 bytes
+    val payload = ciphertext.copyOfRange(12, ciphertext.size)
+    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+    cipher.init(Cipher.DECRYPT_MODE, getOrCreateKey(), GCMParameterSpec(128, iv))
+    return cipher.doFinal(payload)                     // throws on tampered data
+}
+```
+
+Wir nutzen **AES/GCM**: Der GCM-Modus verschlüsselt nicht nur, sondern **authentifiziert** auch: Manipulierte Ciphertexte lassen `doFinal` beim Entschlüsseln mit einer Exception scheitern. Der pro Verschlüsselung frische **IV** (Initialisierungsvektor) wandert unverschlüsselt vor den Ciphertext: Er ist kein Geheimnis, darf sich nur nie wiederholen: Er macht dieselbe Klartext-Nachricht bei jeder Verschlüsselung zu einem anderen Ciphertext. Beim Entschlüsseln wird er einfach wieder abgetrennt.
+
+*Wer `EncryptedSharedPreferences` aus der Jetpack-Security-Library kennt: Sie ist **deprecated** (die Library wird nicht weiterentwickelt). Der heutige Weg ist genau der, den wir hier bauen: eigener schmaler Keystore-Cipher plus moderner Speicher.*
+
+### 11.3 Transaktionale Speicherung: DataStore
+
+Für die Ablage der (verschlüsselten) Werte nehmen wir **DataStore**, den Nachfolger der SharedPreferences:
+
+| | SharedPreferences | DataStore |
+| --- | --- | --- |
+| API | synchron (blockiert den Main Thread!) | `suspend` / `Flow`, passt zu allem, was wir gelernt haben |
+| Schreiben | `apply()` = fire-and-forget, Fehler unsichtbar | **transaktional**: `edit { }` ist atomar, ganz oder gar nicht |
+| Konsistenz | Race Conditions bei parallelen Writes | serialisierte, konsistente Updates |
+| Fehler | verschluckt | als Exception/`Flow`-Error sichtbar |
+
+Gerade bei Geräte-Konfiguration ist das Transaktionale entscheidend: Eine halb geschriebene Terminal-Konfiguration (neue ID, alter Schlüssel) wäre ein Support-Albtraum.
+
+Die komplette API in einem Bild: ein DataStore pro Datei, gelesen wird reaktiv, geschrieben atomar:
+
+```kotlin
+val dataStore: DataStore<Preferences> = PreferenceDataStoreFactory.create {
+    context.preferencesDataStoreFile("secure_settings") // -> files/datastore/secure_settings.preferences_pb
+}
+
+val CONFIG_KEY = stringPreferencesKey("terminal_config")
+
+// Read: a Flow that re-emits on every change - plugs into our reactive world
+val config: Flow<String?> = dataStore.data.map { preferences -> preferences[CONFIG_KEY] }
+
+// Write: edit { } is ONE atomic transaction - all or nothing
+dataStore.edit { preferences -> preferences[CONFIG_KEY] = "..." }
+```
+
+> **Dokumentation:** [developer.android.com/topic/libraries/architecture/datastore](https://developer.android.com/topic/libraries/architecture/datastore)
+
+### 11.4 Das Muster: Verschlüsseltes Settings-Repository
+
+Alle Bausteine zusammengesteckt, und natürlich wieder hinter Interfaces (Modul 7 lässt grüßen):
+
+```mermaid
+graph LR
+    VM[Aufrufer] --> SS["SecureSettings (Interface)"]
+    SS --> Repo[EncryptedSettingsRepository]
+    Repo -->|encrypt/decrypt| Cipher["SettingsCipher (Interface)<br/>Impl: Android Keystore"]
+    Repo -->|Base64-Ciphertext| DS[("Preferences DataStore")]
+```
+
+```kotlin
+interface SettingsCipher {
+    fun encrypt(plaintext: ByteArray): ByteArray
+    fun decrypt(ciphertext: ByteArray): ByteArray
+}
+
+@Serializable
+data class TerminalConfig(val terminalId: String, val apiKey: String)
+
+interface SecureSettings {
+    val terminalConfig: Flow<TerminalConfig?> // reactive, like everything else
+    suspend fun save(config: TerminalConfig)  // encrypt -> transactional write
+    suspend fun clear()
+}
+```
+
+Wichtig fürs Einordnen ist, **was hier eigener Code ist und was Library**: Die beiden Interfaces und das Repository dazwischen sind *unser* Code (zusammen ~50 Zeilen). Alles andere liefern Plattform und Libraries: die `Cipher`-API und der Keystore (11.2), DataStore (11.3), kotlinx.serialization und `Base64` aus dem JDK. Es gibt hier keine Magie und kein Framework, das "Verschlüsselung für DataStore" anbietet: Die Verbindung stellen wir selbst her, und genau die schauen wir uns in 11.5 Zeile für Zeile an.
+
+**Und die Tests?** Der Keystore existiert nur auf Android-Hardware; auf der JVM testen wir das Repository deshalb mit einem `FakeSettingsCipher` und prüfen zwei Dinge: den Roundtrip (speichern → lesen) und dass im DataStore **kein Klartext** landet. Genau dafür haben wir den Cipher als Interface geschnitten.
+
+### 11.5 Die Verdrahtung: Vom Objekt zum Ciphertext im DataStore
+
+Hier schließt sich der Kreis: das komplette `EncryptedSettingsRepository` aus der Musterlösung. Auf dem Hinweg (speichern) durchläuft die Konfiguration vier Stationen, auf dem Rückweg (lesen) dieselben vier rückwärts:
+
+```kotlin
+@Singleton
+class EncryptedSettingsRepository @Inject constructor(
+    private val dataStore: DataStore<Preferences>, // from the DI module below
+    private val cipher: SettingsCipher,            // Keystore impl behind the interface (11.2)
+) : SecureSettings {
+
+    override suspend fun save(config: TerminalConfig) {
+        val plaintext = Json.encodeToString(TerminalConfig.serializer(), config) // 1. object -> JSON
+        val encrypted = cipher.encrypt(plaintext.encodeToByteArray())            // 2. JSON -> ciphertext
+        val encoded = Base64.getEncoder().encodeToString(encrypted)              // 3. bytes -> string
+        dataStore.edit { preferences ->                                          // 4. atomic write
+            preferences[CONFIG_KEY] = encoded
+        }
+    }
+
+    override val terminalConfig: Flow<TerminalConfig?> =
+        dataStore.data.map { preferences ->                                      // 4'. reactive read
+            preferences[CONFIG_KEY]?.let { encoded ->
+                val plaintext = cipher.decrypt(Base64.getDecoder().decode(encoded)) // 3'. + 2'.
+                Json.decodeFromString<TerminalConfig>(plaintext.decodeToString())   // 1'. JSON -> object
+            }
+        }
+
+    override suspend fun clear() {
+        dataStore.edit { preferences -> preferences.remove(CONFIG_KEY) }
+    }
+
+    companion object {
+        private val CONFIG_KEY = stringPreferencesKey("terminal_config")
+    }
+}
+```
+
+Zum Mitlesen: `edit { }`, `data` und die `Preferences`-Keys kommen **von DataStore**; `encrypt`/`decrypt` ist **unser** Cipher-Interface; JSON und Base64 sind Standard-Werkzeuge. Warum Base64? Der Preferences DataStore speichert Strings, kein rohes Byte-Array; Base64 ist nur die Transport-Kodierung, keine Verschlüsselung.
+
+Verdrahtet wird das Ganze mit einem gewohnten Hilt-Modul: ein `@Provides` für den DataStore (er braucht den `Context` und soll genau einmal existieren), zwei `@Binds` für die Interfaces:
+
+```kotlin
+@Module
+@InstallIn(SingletonComponent::class)
+abstract class SettingsModule {
+
+    @Binds @Singleton
+    abstract fun bindSettingsCipher(impl: KeystoreSettingsCipher): SettingsCipher
+
+    @Binds @Singleton
+    abstract fun bindSecureSettings(impl: EncryptedSettingsRepository): SecureSettings
+
+    companion object {
+        @Provides @Singleton
+        fun provideSettingsDataStore(@ApplicationContext context: Context): DataStore<Preferences> =
+            PreferenceDataStoreFactory.create {
+                context.preferencesDataStoreFile("secure_settings")
+            }
+    }
+}
+```
+
+Damit kann jeder Aufrufer einfach `SecureSettings` injizieren; dass dahinter Keystore, Cipher und DataStore zusammenspielen, ist vollständig gekapselt.
+
+> **Die Security-Review-Frage, die garantiert kommt:** "Landet die DataStore-Datei im Auto-Backup?" Ohne expliziten Ausschluss (`dataExtractionRules` bzw. `fullBackupContent`): ja. Das ist hier **unkritisch**: Gesichert wird nur der Ciphertext, und der Schlüssel verlässt den Keystore dieses Geräts nie; auf jedem anderen Gerät ist das Backup wertloser Datenmüll (genau die Exfiltrations-Garantie aus 11.2). Wer die Datei trotzdem vom Backup ausschließt, spart sich die Diskussion; verlassen darf sich das Bedrohungsmodell aber auf die Verschlüsselung, nicht auf den Ausschluss.
+
+> [!NOTE]
+> **Ausblick – DataStore lernt selbst verschlüsseln:** Ab DataStore `1.3.0-alpha07` gibt es das neue Artefakt **`androidx.datastore:datastore-tink`**: Ein `AeadSerializer` umhüllt einen beliebigen `Serializer<T>` und ver-/entschlüsselt mit [Tink](https://github.com/tink-crypto/tink-java) (Googles Krypto-Library), der Master-Key liegt weiterhin im Android Keystore. Unser handgebauter `SettingsCipher` wird damit perspektivisch zur Library-Funktion; das Muster (Keystore-Schlüssel + transaktionaler Store, Verschlüsselung an der Serialisierungs-Grenze) bleibt exakt dasselbe:
+>
+> ```kotlin
+> // implementation("androidx.datastore:datastore-tink:1.3.0-alpha09")
+> val keysetHandle = AndroidKeysetManager.Builder()
+>     .withSharedPref(context, "keyset", "keyset_prefs")
+>     .withKeyTemplate(KeyTemplate.createFrom(PredefinedAeadParameters.AES256_GCM))
+>     .withMasterKeyUri("android-keystore://master_key") // key material guarded by the Keystore
+>     .build()
+>     .keysetHandle
+>
+> val aeadSerializer = AeadSerializer(
+>     aead = keysetHandle.getPrimitive(RegistryConfiguration.get(), Aead::class.java),
+>     wrappedSerializer = TerminalConfigSerializer, // wraps any existing Serializer<T>
+>     associatedData = "secure_settings.json".encodeToByteArray(), // prevents ciphertext swapping
+> )
+>
+> val dataStore = dataStore(fileName = "secure_settings.json", serializer = aeadSerializer, scope = scope)
+> ```
+>
+> Zwei Einordnungen: (1) Der `AeadSerializer` arbeitet auf dem **typisierten** DataStore (`Serializer<T>`), nicht auf den Preferences; man definiert also einen kleinen eigenen Serializer für seine Config-Klasse. (2) Die Serie ist noch **Alpha** (Stand: `1.3.0-alpha09`, Mai 2026): Bis zur stabilen Version bleibt unser eigener Cipher hinter dem Interface der belastbare Weg. Und dank des Interfaces ist die spätere Migration ein reiner Implementierungs-Tausch.
+>
+> **Dokumentation:** [developer.android.com/jetpack/androidx/releases/datastore#1.3.0-alpha09](https://developer.android.com/jetpack/androidx/releases/datastore#1.3.0-alpha09)
+
+
+### 11.6 Netzwerksicherheit: Certificate Pinning
+
+TLS schützt vor Mitlesern, aber es vertraut **jeder** CA im System-Speicher. Im POS-Umfeld (Firmen-Proxies, kompromittierte CAs, MITM am Kassen-WLAN) will man mehr: Die App akzeptiert nur noch **unsere** Server-Identität. Das ist **Certificate Pinning**: Wir "pinnen" den Hash des Server-Public-Keys:
+
+```kotlin
+val certificatePinner = CertificatePinner.Builder()
+    .add(
+        "api.pos-backend.example",
+        "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", // current key
+        "sha256/BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=", // backup key!
+    )
+    .build()
+
+val okHttpClient = OkHttpClient.Builder()
+    .certificatePinner(certificatePinner)
+    .build()
+// -> pass this client into the Retrofit.Builder in the NetworkModule
+```
+
+Alternativ deklarativ über die [Network Security Config](https://developer.android.com/privacy-and-security/security-config), mit gleicher Wirkung, aber ohne Code:
+
+```xml
+<!-- res/xml/network_security_config.xml -->
+<network-security-config>
+    <domain-config>
+        <domain includeSubdomains="true">api.pos-backend.example</domain>
+        <!-- expiration: after this date the pins are ignored instead of bricking the app -->
+        <pin-set expiration="2027-07-01">
+            <pin digest="SHA-256">AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=</pin> <!-- current key -->
+            <pin digest="SHA-256">BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=</pin> <!-- backup key -->
+        </pin-set>
+    </domain-config>
+</network-security-config>
+```
+
+```xml
+<!-- AndroidManifest.xml -->
+<application
+    android:networkSecurityConfig="@xml/network_security_config"
+    ... >
+```
+
+Beachten Sie das `expiration`-Attribut: Nach dem Stichtag werden die Pins **ignoriert statt erzwungen**: ein eingebautes Sicherheitsnetz gegen die vergessene Pin-Rotation, das die OkHttp-Variante so nicht bietet.
+
+> **Vorsicht, zweischneidiges Schwert:**
+> Ein gepinnter Schlüssel, der rotiert wird, **brickt die App** ("connection refused", kein Fallback!). Deshalb gilt: (1) **immer mindestens einen Backup-Pin** hinterlegen, (2) Pins auf den *Public Key* statt aufs Zertifikat (überlebt Re-Issue), (3) Rotations-Prozess mit dem Backend-Team vertraglich klären, **bevor** der erste Pin ausgerollt wird. Für unsere Workshop-App gegen die öffentliche Rick&Morty-API wäre Pinning genau deshalb falsch, denn wir kontrollieren deren Zertifikate nicht. Im POS-Szenario mit eigenem Backend ist es Pflicht.
+
+**Zwei Handgriffe für die Praxis:**
+
+Woher kommt der Pin überhaupt? `openssl` rechnet ihn direkt vom laufenden Server aus:
+
+```bash
+openssl s_client -connect api.pos-backend.example:443 </dev/null 2>/dev/null \
+  | openssl x509 -pubkey -noout \
+  | openssl pkey -pubin -outform DER \
+  | openssl dgst -sha256 -binary | base64
+```
+
+Und: Im Alltag steht Pinning dem Debugging im Weg: Charles/mitmproxy zum Mitschneiden, QA hinter dem Firmen-Proxy. Das Standard-Muster dafür: Pinning gilt nur im Release-Build. Die Network Security Config bringt genau dafür `<debug-overrides>` mit (eine eigene Debug-CA wird nur in debuggable Builds akzeptiert); bei der OkHttp-Variante bindet ein Debug-`NetworkModule` schlicht einen Client ohne Pinner. Entscheidend ist die Richtung: Der Release-Build pinnt immer; der Debug-Build ist die Ausnahme, nie umgekehrt.
+
+> **Dokumentation:** [developer.android.com/privacy-and-security/keystore](https://developer.android.com/privacy-and-security/keystore), [developer.android.com/topic/libraries/architecture/datastore](https://developer.android.com/topic/libraries/architecture/datastore)
+
+---
+
+## Modul 12: Continuous Integration – Der Payoff der JVM-Test-Strategie
+
+### 12.1 Das Konzept: Trigger, Stages, Artefakte
+
+**Das Problem:**
+Vier Test-Suiten, zwei Screenshot-Werkzeuge, ein Build, und alles läuft nur, wenn jemand daran denkt. Menschen vergessen; unter Termindruck zuerst. Und "bei mir läuft's" ist keine Aussage über den Code, sondern über die Maschine, auf der er zufällig lief.
+
+**Die Lösung (Continuous Integration):**
+Ein Dienst baut und testet das Projekt **bei jedem Push automatisch**: auf einer neutralen Maschine, immer mit denselben Schritten. Das Ergebnis ist der grüne Haken am Pull Request: nicht als Deko, sondern als **Pflicht-Bedingung fürs Mergen** (Branch Protection).
+
+Egal welches Werkzeug später zum Einsatz kommt (GitHub Actions, GitLab CI, Jenkins, Azure DevOps), eine Pipeline besteht immer aus denselben vier Bausteinen:
+
+*   **Trigger**: *wann* läuft die Pipeline? Jeder Push, jeder Pull Request, nachts um drei.
+*   **Stage**: ein in sich abgeschlossener Abschnitt der Pipeline mit klarer Aufgabe ("bauen", "testen"). Stages geben der Pipeline ihre Struktur und ihre Lesbarkeit im Fehlerfall: *Welche* Stage ist rot?
+*   **Step**: ein einzelner Befehl innerhalb einer Stage. Bei uns fast immer: ein Gradle-Aufruf.
+*   **Artefakte**: was die Pipeline für Menschen hinterlässt (Test-Reports, Screenshot-Diffs, notfalls ein APK).
+
+**Der Stage-Schnitt für unser Projekt**, sortiert nach dem Fail-Fast-Prinzip, das Billigste zuerst:
+
+1.  **Bauen** (`assembleDebug`) kompiliert alle Module inklusive `build-logic`; Syntax- und Verdrahtungsfehler sterben hier.
+2.  **JVM-Tests** (`test`): Repository-, Settings-, ViewModel- **und** UI-Suite in einem Rutsch.
+3.  **Screenshot-Verifikation** (`verifyRoborazziDebug`, `validateDebugScreenshotTest`): visuelle Regressionen.
+4.  *Optional, nicht bei jedem Push:* Instrumented Tests auf dem Emulator: teuer und langsam, dafür reicht ein nächtlicher Lauf.
+
+Drei Prinzipien, die jede gute Pipeline teilt:
+
+*   **Fail fast:** Schnelle, billige Prüfungen zuerst. Niemand wartet gern zwanzig Minuten auf einen Tippfehler.
+*   **Caching:** Der Gradle- und Dependency-Cache überlebt zwischen den Läufen, sonst lädt jeder Lauf das halbe Maven Central neu.
+*   **Determinismus:** Ein flaky Test ruiniert die ganze Pipeline, weil Rot seine Bedeutung verliert. Unsere Suiten sind bewusst deterministisch gebaut: virtuelle Zeit (Modul 8), Fakes statt Netzwerk, feste Bilder statt Coil-Requests (Modul 10).
+
+> **Experten-Tipp – Caching ist ein Kostenhebel, kein Komfort-Feature:**
+> CI-Anbieter rechnen in **Runner-Minuten** ab: Jede eingesparte Minute ist bares Geld, multipliziert mit jedem Push des ganzen Teams. Der Dependency-Cache von oben ist dabei nur die unterste Stufe (er spart Downloads, nicht Arbeit). Der große Hebel ist der **Gradle Build Cache** (`org.gradle.caching=true`): Er speichert die *Ergebnisse* von Tasks (kompilierte Klassen, Testresultate) und stellt sie wieder her, statt neu zu rechnen. Hier zahlt die Modularisierung aus Modul 3 ihre vielleicht größte Dividende: Wer nur `:feature:characterlist` anfasst, bekommt Kompilierung *und* Tests aller unberührten Module als Cache-Hit; die Pipeline prüft nur noch, was sich wirklich geändert hat. Die Ausbaustufe ist ein **Remote Build Cache** (z.B. Develocity oder ein simpler HTTP-Cache-Node): Ein geteilter Cache für alle Runner *und* alle Entwickler-Rechner: Was die CI heute Nacht gebaut hat, muss morgen früh niemand mehr lokal bauen. Voraussetzung für all das sind allerdings deterministische, gut deklarierte Task-Inputs, womit wir wieder bei den Convention Plugins wären (Modul 3.4): einheitliche Build-Konfiguration ist auch Cache-Hygiene.
+
+> **Faustregel:**
+> Hier zahlt sich die JVM-Test-Strategie von Tag 3 wirtschaftlich aus: Weil **alle** Suiten ohne Emulator laufen, genügt der billigste Linux-Runner: keine Virtualisierung, keine Gerätefarm, keine Spezial-Hardware. CI-Kosten sind eine Architektur-Entscheidung.
+
+### 12.2 Konkret: GitHub Actions
+
+Die Begriffe aus 12.1 heißen bei GitHub Actions so: Die Pipeline ist ein **Workflow** (eine YAML-Datei unter `.github/workflows/`), Stages sind **Jobs** bzw. benannte **Steps**, der Rechner ist der **Runner** (`runs-on`). Das Grundgerüst des Workflows für unser Projekt (die vollständige Datei liegt im Repo, siehe 12.3):
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+
+on:
+  pull_request:              # every PR gets the green check
+  push:
+    branches: [main]         # and main itself stays green
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest   # plain Linux box - all our suites are JVM-only
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v6   # Gradle + dependency caching
+
+      # Stage 1: build
+      - name: Build
+        run: ./gradlew assembleDebug
+
+      # Stage 2: all JVM test suites (unit + Robolectric UI)
+      - name: JVM tests
+        run: ./gradlew test
+
+      # Stage 3: visual regressions
+      - name: Screenshot verification
+        run: ./gradlew verifyRoborazziDebug validateDebugScreenshotTest
+
+      # Artifacts for humans - only when something went red
+      - name: Upload reports & screenshot diffs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports
+          path: |
+            **/build/reports/
+            **/build/outputs/roborazzi/
+```
+
+Zum Einordnen:
+
+*   **Ein Job, mehrere Steps**, obwohl 12.1 von getrennten Stages spricht: Jeder Job läuft auf einer *eigenen frischen Maschine*, müsste also Checkout, JDK und Gradle-Cache wiederholen. Bei unserer Projektgröße wären getrennte Jobs Overhead ohne Nutzen: Die benannten Steps *sind* unsere Stages, und im Fehlerfall zeigt GitHub genau an, welcher rot wurde. Getrennte Jobs lohnen sich, sobald Stages **parallel** laufen sollen oder unterschiedliche Maschinen brauchen (der nächtliche Emulator-Job).
+*   **`if: failure()`**: Artefakte kosten Speicher; die Reports und Roborazzi-Diffs interessieren nur, wenn etwas rot ist. Dann aber liegen sie als Download direkt am fehlgeschlagenen Lauf.
+*   **Die Pipeline ist Code:** Sie liegt versioniert im Repo, wandert durch Reviews wie jede andere Änderung, und eine kaputte Pipeline ist ein Bug wie jeder andere.
+
+> **Faustregel:**
+> Erst der Haken, dann der Merge: Deklarieren Sie den CI-Check in den Branch-Protection-Regeln als Pflicht. Eine Pipeline, deren Rot man ignorieren kann, erzieht das Team zum Ignorieren.
+
+### 12.3 Die Pipeline liegt im Repo – und wächst mit
+
+Der Workflow aus 12.2 ist keine Theorie: Er liegt als `.github/workflows/ci.yml` in diesem Repository und läuft bei jedem Push, für jeden Übungs-Branch. Und er wächst mit dem Projekt: Auf den frühen Branches prüft er Bauen, Lint und JVM-Tests; ab der Musterlösung von Übung 3.2 (sobald Goldens existieren) kommt die Screenshot-Stage dazu. Jeder Branch prüft genau das, was sein Code kann.
+
+Gegenüber dem Grundgerüst aus 12.2 enthält die echte Datei drei Dinge, die in Produktions-Pipelines Standard sind:
+
+```yaml
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true     # a newer push supersedes the running build
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30        # a hanging build must not block the queue
+```
+
+*   **`concurrency` + `cancel-in-progress`:** Wer dreimal kurz hintereinander pusht, will nur den letzten Stand geprüft haben; die überholten Läufe werden abgebrochen, statt Runner-Minuten zu verbrennen.
+*   **`timeout-minutes`:** Ein hängender Build (Deadlock, wartendes Netzwerk) blockiert sonst Runner und Warteschlange und kostet, bis ihn jemand bemerkt.
+*   **Eine Lint-Stage** zwischen Bauen und Tests, dazu gleich mehr (12.4). Dadurch verschieben sich gegenüber dem Grundgerüst die Stage-Nummern in den Kommentaren: Lint wird Stage 2, Tests und Screenshots rücken eine Position nach hinten.
+
+> **Demo – machen Sie die Pipeline einmal rot:** Ändern Sie ein Padding in `CharacterListContent` (oder löschen Sie testweise ein Golden), pushen Sie, und öffnen Sie den **Actions-Tab**: Die Screenshot-Stage wird rot, und am fehlgeschlagenen Lauf hängt das `test-reports`-Artefakt mit dem Diff-Bild (Referenz | Ist | Unterschied). Genau dieser Loop (roter Haken, Diff ansehen, entscheiden) ist Screenshot-Testing im Alltag.
+
+### 12.4 Was in echten Projekten dazukommt
+
+**Statische Analyse, die billigste Stage von allen:**
+**Android Lint** (`lintDebug`) läuft ohne eine einzige neue Dependency und findet Android-spezifische Fehler: kaputte Ressourcen-Referenzen, API-Level-Verstöße, Manifest-Probleme. In unserer `ci.yml` steht die Stage direkt nach dem Bauen, billiger als jede Test-Suite. Darüber hat sich ein Ökosystem etabliert: **Spotless** (Formatierung: Diskussionen über Einrückung führt ab sofort die Maschine, nicht das Code-Review), **detekt** (statische Analyse für Kotlin: Komplexität, Code-Smells, verbotene Muster) und **Konsist** (Architektur-Regeln als ganz normale Unit-Tests: "kein `:feature`-Modul greift auf ein anderes `:feature` zu", "jedes ViewModel heißt `*ViewModel`", also die Modul-Grenzen aus Modul 3, nur maschinell erzwungen statt nur vereinbart).
+
+> **Faustregel:**
+> Formatierung und Statik gehören in die Pipeline, nicht ins Code-Review. Menschen reviewen Design-Entscheidungen, Leerzeichen reviewt die Maschine.
+
+**Secrets & Signing:**
+Der Release-Keystore ist das wertvollste Geheimnis des Projekts: Wer ihn besitzt, kann Updates unter unserer Identität signieren. Er gehört deshalb **nie ins Git** (auch nicht "nur im internen Repo", Modul 11 lässt grüßen). CI-Systeme haben dafür einen Secret-Store (GitHub: *Settings → Secrets and variables*; verschlüsselt abgelegt, in Logs automatisch maskiert). Das übliche Muster: Keystore Base64-kodiert als Secret hinterlegen, im Release-Job in eine Datei dekodieren; die `signingConfig` liest die Passwörter aus Umgebungsvariablen. Zwei Regeln dazu: Signing gehört **nur in die Release-Lane**: Der PR-Check aus 12.2 braucht keinerlei Secrets. Und Fork-PRs bekommen von GitHub grundsätzlich keine Secrets zu sehen, ein Grund mehr für die Trennung. Der Vollausbau (Git-Tag → signierter Build → Play-Store-Track oder Firebase App Distribution) ist dann nur eine weitere Lane aus denselben Bausteinen.
+
+**Supply Chain – Actions sind auch nur Dependencies:**
+`actions/checkout@v7` ist ein beweglicher Tag: Wer den Tag kontrolliert, kontrolliert den Code, der mit Zugriff auf unsere Secrets läuft. Enterprise-Pipelines pinnen Actions deshalb auf den vollen Commit-SHA (`actions/checkout@<sha>`, den Tag als Kommentar daneben). Modul 11 lässt auch hier grüßen: dieselbe Bedrohung, eine Schicht höher. Aktuell halten die SHAs Werkzeuge wie Dependabot oder Renovate.
+
+**Die zweite Lane, der nächtliche Emulator-Job:**
+Stage 4 aus 12.1 (Instrumented Tests) bekommt in der Praxis einen eigenen Workflow mit eigenen Triggern: `schedule:` (Cron-Syntax, nachts um drei) plus `workflow_dispatch:` (der manuelle Knopf im Actions-Tab). Den Emulator auf dem Runner von Hand zu starten und abzuwarten ist Flakiness pur; der heutige Weg sind **Gradle Managed Devices**: Das Testgerät wird deklarativ in der `build.gradle.kts` beschrieben, Gradle bootet, verwaltet und entsorgt es selbst. Gewöhnliche Ubuntu-Runner können das inzwischen dank KVM-Virtualisierung, Spezial-Hardware braucht es nicht mehr.
+
+### 12.5 Dieselben Konzepte in GitLab & Jenkins
+
+In Enterprise-Umgebungen heißt das CI-System oft GitLab oder Jenkins. Die Begriffe verschieben sich, die vier Bausteine aus 12.1 bleiben exakt dieselben:
+
+| | GitHub Actions | GitLab CI | Jenkins |
+| --- | --- | --- | --- |
+| Definition | `.github/workflows/*.yml` | `.gitlab-ci.yml` | `Jenkinsfile` |
+| Pipeline | Workflow | Pipeline | Pipeline |
+| Stage | Job bzw. benannter Step | `stage` | `stage { }` |
+| Einzelschritt | `run:` | Zeile im `script:` | `sh`-Step |
+| Rechner | Runner (`runs-on`) | Runner (über Tags) | Agent / Node |
+| Artefakte | `actions/upload-artifact` | `artifacts:` | `archiveArtifacts` |
+
+Wer eine Pipeline lesen kann, liest alle drei: Die Übersetzung ist Vokabelarbeit, keine Konzeptarbeit.
+
+> **Dokumentation:** [docs.github.com/actions](https://docs.github.com/actions) (Konzepte & Referenz); die gleichen Ideen bei GitLab: [docs.gitlab.com/ci](https://docs.gitlab.com/ci/)
+
+---
+
+## Schlusswort: Drei Tage, ein roter Faden
+
+Tag 1 hat die App modularisiert, Hilt-verdrahtet und offline-fähig gemacht. Tag 2 hat Fehler, Observability und Tests zur Architektur-Frage erklärt. Tag 3 hat die Test-Pyramide auf der JVM vervollständigt, die App für den Enterprise-Einsatz gehärtet und mit der CI den Ort gezeigt, an dem sich all das dauerhaft auszahlt.
+
+Der rote Faden: Das waren durchweg **Architektur-Entscheidungen, keine Werkzeug-Entscheidungen**. Hilt, Room, Roborazzi und GitHub Actions sind austauschbar; Schichtgrenzen, Verträge an den Nahtstellen, SSOT und deterministische Tests bleiben. Wer die Muster verstanden hat, nimmt sie in jedes Projekt mit, unabhängig davon, welches Logo auf dem Werkzeug klebt.
+
+---
+
 ## Anhang A: Setup & Dependencies für Tag 1
 
 Wie gewohnt pflegen wir alle Versionen zentral in `gradle/libs.versions.toml`.
