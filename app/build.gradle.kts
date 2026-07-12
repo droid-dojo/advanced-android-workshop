@@ -44,6 +44,7 @@ dependencies {
     implementation(projects.core.analytics.api)
     implementation(projects.core.analytics.impl)
     implementation(projects.core.data.impl)
+    implementation(projects.core.settings.impl)
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
