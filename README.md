@@ -1,51 +1,62 @@
-# 🏁 Lab 2 – Finale: Observability & getestete reaktive Logik
+# 🧪 Lab 3 – Übung 3.1: Funktionale UI-Tests auf der JVM
 
-**Geschafft!** Dieser Branch (`lab-2-final`) enthält die **Musterlösung zu Übung 2.2** und damit den vollständigen Endstand von Tag 2.
+**Willkommen zu Tag 3!** Dieser Branch (`lab-3-uebung-3.1`) entspricht inhaltlich dem Endstand von Tag 2 (`lab-2-final`).
 
----
-
-## ✅ Rückblick: Die Lösung zu Übung 2.2
-
-Das ist neu bzw. anders gegenüber dem Branch `lab-2-uebung-2.2`:
-
-* **`CharacterRepository` ist jetzt ein Interface**: die Implementierung heißt `OfflineFirstCharacterRepository` und wird im neuen `DataModule` per `@Binds` verdrahtet. Die ViewModels blieben unangetastet: Sie verlangten schon immer nur den Vertrag, Hilt liefert jetzt eben die Implementierung dahinter. Das ist Dependency Inversion in Aktion.
-* **`:core:data` ist jetzt ein api/impl-Paar** (Modul 3.3): Das Interface wohnt in `:core:data:api`, alles andere (Retrofit, Room, Hilt-Module, Tests) in `:core:data:impl`. Die Features kompilieren nur noch gegen den Vertrag, `OfflineFirstCharacterRepository` ist für sie physisch unsichtbar. Allein `:app` hebt `:impl` in den Graphen. Und dank Convention Plugin war der Gradle-Anteil des Umbaus trivial: Beide neuen Build-Dateien starten mit einer Zeile `alias(libs.plugins.rickandmorty.android.library)`.
-* **`feature/characterlist/src/test/`** – die neue Test-Suite:
-    * `MainDispatcherRule`: das `setMain`/`resetMain`-Muster aus Handout 8.3, einmal gebündelt statt als `@Before`/`@After`-Copy-Paste in jeder Testklasse. `viewModelScope` läuft damit auf der virtuellen Test-Uhr.
-    * `FakeCharacterRepository`: eine reaktive In-Memory-Implementierung mit steuerbarer "Netzwerk-Antwort" und steuerbarem Fehlverhalten.
-    * `CharacterListViewModelTest`: sechs Tests, die **jeden Zustandsübergang** des ViewModels verifizieren: Loading vor dem ersten Refresh, Success nach Refresh, Fehler mit Cache (`isRefreshFailed`-Flag statt Error-Screen!), Fehler ohne Cache (Error), Flag-Reset beim Retry, Favoriten-Toggle.
-* **Der Success-Fall steht bewusst ohne Turbine da:** leerer Collector im `backgroundScope` (sonst startet `stateIn(WhileSubscribed)` nie, Stolperfalle 1 aus Handout 8.6) plus Assert auf `.value` (konflationssicher, Stolperfalle 2).
-* **Turbine** verkürzt die übrigen Fälle (`test { }`, `awaitItem()`, `expectMostRecentItem()`), und `assertIs` aus `kotlin-test` prüft und typisiert die Sealed-States in einem Schritt, statt roher `as`-Casts. `advanceUntilIdle()` bewegt in beiden Welten die virtuelle Uhr. Kein `Thread.sleep`, kein Emulator: die komplette Suite läuft in Millisekunden auf der JVM.
-
-Vergleichen Sie gerne mit Ihrer eigenen Lösung: `git diff lab-2-uebung-2.2 lab-2-final`
+> 📘 Die Theorie zu dieser Übung finden Sie im [HANDOUT.md](HANDOUT.md), **Modul 9** (Der Semantics Tree) und **Modul 10.1** (Robolectric). Die Dependencies stehen im Setup-Abschnitt von Tag 3.
 
 ---
 
-## 🛠 Was wir an Tag 2 gebaut haben
+## 🔍 Die Ausgangslage
 
-* **Fehlerbehandlung als Architektur-Thema (Modul 6):** Fehler sind Domain-Zustände, keine Überraschungen: vom `isRefreshFailed`-Flag bis zum typisierten `DataResult`-Wrapper mit Exception-Mapping an der Schicht-Grenze.
-* **Entkoppelte Observability (Übung 2.1):** Screen-Tracking und User-Events leben als Lifecycle-Nebeneffekte in der UI-Schicht, technisches Logging hinter dem injizierten `AppLogger` in der Datenschicht, und die ViewModels wissen von alledem nichts. Anbieterwechsel = ein `@Binds`-Modul tauschen.
-* **Getestete reaktive Logik (Übung 2.2):** Interface an der Nahtstelle zum Repository (physisch besiegelt durch das api/impl-Paar `:core:data:api`/`:core:data:impl`), Fakes statt Mocks, virtuelle Zeit statt echter: Die `combine`/`stateIn`-Maschinerie aus Tag 1 ist jetzt beweisbar korrekt.
+Repository und ViewModel sind getestet, aber niemand beweist bisher, dass die **UI** den richtigen Zustand zeichnet und Klicks die richtigen Events auslösen. Ein kaputter `when`-Zweig im `CharacterListContent` würde durch alle bisherigen Tests rutschen.
 
-## 💻 Den Code ausführen
+Der klassische Weg wären Instrumented Tests auf dem Emulator: langsam, flaky, teuer in der CI. Wir gehen den modernen Weg: **Compose-UI-Tests auf der lokalen JVM** mit Robolectric.
 
-1. Branch auschecken, **Sync**, **Run**.
-2. Logcat beobachten (Filter: `Analytics` bzw. `OfflineFirstCharacterRepository`): Beim Navigieren erscheinen `screen_view`-Einträge, beim Favorisieren `toggle_favorite`, beim Refresh im Flugzeugmodus ein Error-Log aus der Datenschicht.
-3. Tests: `./gradlew test` (Repository- und ViewModel-Suite zusammen).
+## 🎯 Das Ziel
 
-## 🎯 Herausforderungen zum Weiterbauen
+Eine funktionale UI-Test-Suite für das Listen-Feature, die in `src/test/` lebt und mit `./gradlew test` in Sekunden läuft:
 
-1. **Typisierte Fehler:** Bauen Sie das Repository auf den `DataResult`-Wrapper aus Modul 6.3/6.4 um, inklusive `safeCall` und eigenem Error-Mapping. Wie verändert sich das ViewModel, wie die Tests?
-2. **Detail-ViewModel testen:** Das `CharacterDetailViewModel` hat dieselbe reaktive Struktur. Schreiben Sie die Test-Suite dafür (der `FakeCharacterRepository` lässt sich wiederverwenden, wenn Sie ihn in ein geteiltes Test-Modul oder per `testFixtures` verschieben).
-3. **Analytics verifizieren:** Ein `FakeAnalyticsTracker` plus ein Test, der prüft, dass `toggle_favorite` mit der richtigen Charakter-ID getrackt wird. Dank CompositionLocal geht das sogar als reiner Composable-Test (Vorgeschmack auf Tag 3!).
-4. **Debug vs. Release:** Binden Sie den `LogcatLogger` nur im Debug-Build und einen No-Op-Logger im Release-Build (Stichwort: Hilt-Module pro Build-Variante über Source Sets).
+* Jeder UI-Zustand (`Loading`, `Success`, `Error`, Offline-Banner) wird über den **Semantics Tree** verifiziert.
+* Interaktionen (Charakter-Klick, Favoriten-Klick) werden als **Events** geprüft, nicht als Navigation.
+* Nebenbei wird die App **barrierefreier**: sinnvolle `contentDescription`s statt stummer Icons.
 
-## 📚 Wichtige Ressourcen zum Nachschlagen
+## 🛠 Die Aufgaben im Detail
 
-* **Unser Workshop-Handout:** [📘 HANDOUT.md](HANDOUT.md)
-* **Coroutines testen:** [developer.android.com/kotlin/coroutines/test](https://developer.android.com/kotlin/coroutines/test)
-* **Flows testen (Hot vs. Cold):** [developer.android.com/kotlin/flow/test](https://developer.android.com/kotlin/flow/test)
-* **Turbine:** [github.com/cashapp/turbine](https://github.com/cashapp/turbine)
-* **Hilt Testing Guide:** [developer.android.com/training/dependency-injection/hilt-testing](https://developer.android.com/training/dependency-injection/hilt-testing)
+### Schritt 1: Dependencies & Test-Setup
 
-**Weiter geht's:** Die Aufgabenstellung für **Übung 3.1 (UI-Tests auf der JVM)**, und damit der Start von Tag 3, wartet im Branch `lab-3-uebung-3.1`.
+1. Ergänzen Sie `robolectric`, `ui-test-junit4`, `ui-test-manifest` und `androidx-test-ext-junit` (Setup-Abschnitt Tag 3 im Handout; die Screenshot-Teile brauchen Sie erst in Übung 3.2).
+2. Aktivieren Sie in `feature/characterlist/build.gradle.kts` die `testOptions`-Einstellung `isIncludeAndroidResources = true`.
+3. Legen Sie `src/test/resources/robolectric.properties` an, mit `sdk=36` und `graphicsMode=NATIVE` (warum, steht in Modul 10.1). Ihre Testklassen bleiben damit frei von Robolectric-Annotationen.
+
+### Schritt 2: Die UI testbar (und barrierefrei) machen
+
+1. **Sichtbarkeit:** `CharacterListContent` ist `private`. Lockern Sie es auf `internal`, damit die Tests im selben Modul es mit festen Zuständen aufrufen können (Modul 9.4). Die Modul-Grenze nach außen bleibt intakt!
+2. **Semantik:** Geben Sie dem Lade-Indikator ein `testTag` (z.B. `"loading_indicator"`), denn eine sinnvolle `contentDescription` gibt es für einen Spinner nicht. Das Favoriten-Icon dagegen bringt bereits eine **zustandsabhängige** `contentDescription` mit (`"Add to favorites"` / `"Remove from favorites"`) – genau darüber werden Ihre Tests es finden. Werfen Sie einen Blick in `CharacterItem.kt` und überlegen Sie: Was liest TalkBack hier vor?
+
+### Schritt 3: Die Test-Suite
+
+Erstellen Sie `CharacterListScreenTest` in `src/test/`, annotiert nur mit `@RunWith(AndroidJUnit4::class)` (der Runner delegiert auf der JVM automatisch an Robolectric, Modul 10.1) und mit einer `createComposeRule()`. Testen Sie mindestens:
+
+- [ ] `Loading` zeigt den Lade-Indikator (`onNodeWithTag`).
+- [ ] `Success` zeigt die Namen der Charaktere (`onNodeWithText`).
+- [ ] `Error` zeigt die Fehlermeldung.
+- [ ] Das Offline-Banner erscheint **nur**, wenn `isRefreshFailed = true` (positiv **und** negativ testen, `assertDoesNotExist`!).
+- [ ] Ein Klick auf einen Charakter liefert dessen `id` über `onCharacterClick`.
+- [ ] Ein Klick auf das Favoriten-Icon liefert die `id` über `onFavoriteClick` (Finder: `onNodeWithContentDescription`).
+
+## ✅ Definition of Done
+
+- [ ] Alle UI-Tests liegen in `src/test/` (nicht `androidTest/`) und laufen ohne Emulator.
+- [ ] `./gradlew test` läuft grün: ViewModel-, Repository- **und** UI-Tests zusammen.
+- [ ] Die Tests finden das Favoriten-Icon über seine `contentDescription`, nicht über ein `testTag`.
+- [ ] Kein Test wartet real (`Thread.sleep` verboten).
+
+## 💡 Tipps
+
+* `composeTestRule.onRoot().printToLog("TREE")` zeigt den Semantics Tree, wenn ein Finder ins Leere greift.
+* Bei mehreren Treffern (`onAllNodesWith...`): mit `[0]` indizieren oder den Finder präzisieren.
+* Die `LazyColumn` rendert nur Sichtbares. Für tiefer liegende Items `performScrollTo()` verwenden.
+
+---
+
+**Fertig?** Die Musterlösung, und damit die Aufgabenstellung für **Übung 3.2 (Screenshot-Tests)**, finden Sie im Branch `lab-3-uebung-3.2`.
