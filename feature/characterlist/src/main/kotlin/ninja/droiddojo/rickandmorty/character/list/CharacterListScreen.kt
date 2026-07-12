@@ -25,6 +25,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.tooling.preview.PreviewDynamicColors
 import androidx.compose.ui.tooling.preview.PreviewLightDark
@@ -60,7 +61,7 @@ fun CharacterListScreen(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CharacterListContent(
+internal fun CharacterListContent(
     state: CharacterListUiState,
     onFavoriteClick: (Int) -> Unit,
     onCharacterClick: (Int) -> Unit
@@ -78,7 +79,9 @@ private fun CharacterListContent(
             when (state) {
                 is CharacterListUiState.Loading -> {
                     CircularProgressIndicator(
-                        modifier = Modifier.align(Alignment.Center)
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .testTag("loading_indicator")
                     )
                 }
 
