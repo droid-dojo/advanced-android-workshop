@@ -1,5 +1,6 @@
 package ninja.droiddojo.rickandmorty
 
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
@@ -13,6 +14,7 @@ import coil3.compose.LocalAsyncImagePreviewHandler
 @Composable
 fun PreviewContainer(
     imagePlaceHolderColor: Color = Color.Red,
+    darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit
 ) {
     val previewHandler = AsyncImagePreviewHandler {
@@ -20,7 +22,7 @@ fun PreviewContainer(
     }
 
     CompositionLocalProvider(LocalAsyncImagePreviewHandler provides previewHandler) {
-        RickAndMortyTheme {
+        RickAndMortyTheme(darkTheme = darkTheme) {
             content()
         }
     }

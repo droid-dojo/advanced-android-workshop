@@ -1,5 +1,7 @@
 plugins {
     alias(libs.plugins.rickandmorty.android.feature)
+    alias(libs.plugins.roborazzi)
+    alias(libs.plugins.screenshot)
 }
 
 android {
@@ -9,6 +11,7 @@ android {
             isIncludeAndroidResources = true
         }
     }
+    experimentalProperties["android.experimental.enableScreenshotTest"] = true
 }
 
 dependencies {
@@ -23,4 +26,9 @@ dependencies {
     testImplementation(libs.androidx.compose.ui.test.manifest)
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.ext.junit)
+    testImplementation(libs.roborazzi)
+    testImplementation(libs.roborazzi.compose)
+
+    screenshotTestImplementation(libs.screenshot.validation.api)
+    screenshotTestImplementation(libs.androidx.compose.ui.tooling)
 }
