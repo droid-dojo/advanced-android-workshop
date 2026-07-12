@@ -1,62 +1,82 @@
-# 🧪 Lab 3 – Übung 3.1: Funktionale UI-Tests auf der JVM
+# 🧪 Lab 3 – Übung 3.2: Visuelle Regressionstests (Screenshot-Testing)
 
-**Willkommen zu Tag 3!** Dieser Branch (`lab-3-uebung-3.1`) entspricht inhaltlich dem Endstand von Tag 2 (`lab-2-final`).
+Dieser Branch (`lab-3-uebung-3.2`) enthält die **Musterlösung zu Übung 3.1** und ist gleichzeitig der Startpunkt für Übung 3.2.
 
-> 📘 Die Theorie zu dieser Übung finden Sie im [HANDOUT.md](HANDOUT.md), **Modul 9** (Der Semantics Tree) und **Modul 10.1** (Robolectric). Die Dependencies stehen im Setup-Abschnitt von Tag 3.
+> 📘 Die Theorie zu dieser Übung finden Sie im [HANDOUT.md](HANDOUT.md), **Modul 10.2–10.4**. Die Dependencies stehen im Setup-Abschnitt von Tag 3.
+
+---
+
+## ✅ Rückblick: Die Lösung zu Übung 3.1
+
+Das ist neu bzw. anders gegenüber dem Branch `lab-3-uebung-3.1`:
+
+* **`feature/characterlist/build.gradle.kts`**: Robolectric + `ui-test-junit4`/`ui-test-manifest` als `testImplementation`, dazu `isIncludeAndroidResources = true` in den `testOptions`.
+* **`CharacterListContent`**: von `private` auf `internal` gelockert. Tests im selben Modul können jetzt feste Zustände hineingeben; nach außen bleibt die Modul-Grenze dicht.
+* **`testTag("loading_indicator")`**: der Spinner ist als einziges Element über ein Tag auffindbar; alles andere finden die Tests über echte Semantik (`Text`, `contentDescription`).
+* **`CharacterListScreenTest`**: acht Robolectric-Tests in `src/test/`: alle vier UI-Zustände, Banner positiv **und** negativ, Klick-Events für Charakter und Favorit, und ein Test, der beweist, dass die Favoriten-Semantik den Zustand spiegelt (was TalkBack vorliest, stimmt!).
+
+Vergleichen Sie gerne mit Ihrer eigenen Lösung: `git diff lab-3-uebung-3.1 lab-3-uebung-3.2`
 
 ---
 
 ## 🔍 Die Ausgangslage
 
-Repository und ViewModel sind getestet, aber niemand beweist bisher, dass die **UI** den richtigen Zustand zeichnet und Klicks die richtigen Events auslösen. Ein kaputter `when`-Zweig im `CharacterListContent` würde durch alle bisherigen Tests rutschen.
-
-Der klassische Weg wären Instrumented Tests auf dem Emulator: langsam, flaky, teuer in der CI. Wir gehen den modernen Weg: **Compose-UI-Tests auf der lokalen JVM** mit Robolectric.
+Die funktionalen Tests prüfen, *dass* Rick angezeigt wird, nicht *wie*. Ein verrutschtes Padding, ein unlesbarer Dark Mode, ein Banner, das plötzlich den halben Screen füllt: alles grün. Für Layout-Wahrheiten brauchen wir **Golden Images**.
 
 ## 🎯 Das Ziel
 
-Eine funktionale UI-Test-Suite für das Listen-Feature, die in `src/test/` lebt und mit `./gradlew test` in Sekunden läuft:
+Eine Screenshot-Test-Suite für das Listen-Feature, die **pixelgenaue Regressionen** auf der JVM erkennt:
 
-* Jeder UI-Zustand (`Loading`, `Success`, `Error`, Offline-Banner) wird über den **Semantics Tree** verifiziert.
-* Interaktionen (Charakter-Klick, Favoriten-Klick) werden als **Events** geprüft, nicht als Navigation.
-* Nebenbei wird die App **barrierefreier**: sinnvolle `contentDescription`s statt stummer Icons.
+* Ein Golden Image pro visuell eigenständigem Zustand, jeweils in **Light und Dark Mode**.
+* Die Goldens liegen **im Git** und werden per Gradle-Task verifiziert.
+* Die Bilder sind **deterministisch** (keine echten Netzwerk-Bilder!).
 
-## 🛠 Die Aufgaben im Detail
+**Sie haben die Wahl des Werkzeugs:**
 
-### Schritt 1: Dependencies & Test-Setup
+* **Variante A – Roborazzi** (Modul 10.3): der etablierte Community-Standard, baut direkt auf Ihrem Robolectric-Setup aus Übung 3.1 auf.
+* **Variante B – Compose Preview Screenshot Testing** (Modul 10.4): Googles offizielles Tool, noch Alpha: Ihre `@Preview`s werden zu Tests (Setup im Ausblick-Kasten).
 
-1. Ergänzen Sie `robolectric`, `ui-test-junit4`, `ui-test-manifest` und `androidx-test-ext-junit` (Setup-Abschnitt Tag 3 im Handout; die Screenshot-Teile brauchen Sie erst in Übung 3.2).
-2. Aktivieren Sie in `feature/characterlist/build.gradle.kts` die `testOptions`-Einstellung `isIncludeAndroidResources = true`.
-3. Legen Sie `src/test/resources/robolectric.properties` an, mit `sdk=36` und `graphicsMode=NATIVE` (warum, steht in Modul 10.1). Ihre Testklassen bleiben damit frei von Robolectric-Annotationen.
+*Die Musterlösung enthält **beide** Varianten nebeneinander; Sie können Ihre Wahl also in jedem Fall vergleichen.*
 
-### Schritt 2: Die UI testbar (und barrierefrei) machen
+## 🛠 Die Aufgaben im Detail (Variante A)
 
-1. **Sichtbarkeit:** `CharacterListContent` ist `private`. Lockern Sie es auf `internal`, damit die Tests im selben Modul es mit festen Zuständen aufrufen können (Modul 9.4). Die Modul-Grenze nach außen bleibt intakt!
-2. **Semantik:** Geben Sie dem Lade-Indikator ein `testTag` (z.B. `"loading_indicator"`), denn eine sinnvolle `contentDescription` gibt es für einen Spinner nicht. Das Favoriten-Icon dagegen bringt bereits eine **zustandsabhängige** `contentDescription` mit (`"Add to favorites"` / `"Remove from favorites"`) – genau darüber werden Ihre Tests es finden. Werfen Sie einen Blick in `CharacterItem.kt` und überlegen Sie: Was liest TalkBack hier vor?
+### Schritt 1: Setup
 
-### Schritt 3: Die Test-Suite
+1. `roborazzi`-Version, die beiden Libraries und das Plugin in die `libs.versions.toml` (Setup-Abschnitt Tag 3), Plugin mit `apply false` in die Root-`build.gradle.kts`.
+2. Plugin + die zwei `testImplementation`-Dependencies in `feature/characterlist/build.gradle.kts`.
 
-Erstellen Sie `CharacterListScreenTest` in `src/test/`, annotiert nur mit `@RunWith(AndroidJUnit4::class)` (der Runner delegiert auf der JVM automatisch an Robolectric, Modul 10.1) und mit einer `createComposeRule()`. Testen Sie mindestens:
+### Schritt 2: Determinismus sicherstellen
 
-- [ ] `Loading` zeigt den Lade-Indikator (`onNodeWithTag`).
-- [ ] `Success` zeigt die Namen der Charaktere (`onNodeWithText`).
-- [ ] `Error` zeigt die Fehlermeldung.
-- [ ] Das Offline-Banner erscheint **nur**, wenn `isRefreshFailed = true` (positiv **und** negativ testen, `assertDoesNotExist`!).
-- [ ] Ein Klick auf einen Charakter liefert dessen `id` über `onCharacterClick`.
-- [ ] Ein Klick auf das Favoriten-Icon liefert die `id` über `onFavoriteClick` (Finder: `onNodeWithContentDescription`).
+Schreiben Sie den kleinen `ScreenshotContainer`-Helfer (Modul 10.3) in die Test-Sourcen: `LocalInspectionMode` auf `true` zwingen + `PreviewContainer` + ein eigener `AsyncImagePreviewHandler`, der ein **echtes Bild aus den Test-Ressourcen** lädt (`src/test/res/drawable-nodpi/`): deterministisch wie eine Farbfläche, aber der Screenshot deckt echtes Bild-Decoding und die Skalierung im Layout mit ab.
+
+### Schritt 3: Die Screenshot-Suite
+
+Erstellen Sie `CharacterListScreenshotTest` (wieder nur `@RunWith(AndroidJUnit4::class)`; die `robolectric.properties` aus 3.1 gilt für das ganze Modul) und halten Sie mit `captureRoboImage()` fest:
+
+- [ ] `Success` mit den Sample-Charakteren, Light **und** Dark (Tipp: `RickAndMortyTheme(darkTheme = true)` innerhalb des Containers erzwingen oder zwei Tests schreiben).
+- [ ] `Success` mit sichtbarem Offline-Banner.
+- [ ] `Loading` und `Error`.
+- [ ] Ein einzelnes `CharacterItem` als Favorit (rotes Herz!).
+
+### Schritt 4: Record, Verify, Kaputtmachen
+
+1. Goldens aufnehmen: `./gradlew recordRoborazziDebug`, die PNGs committen!
+2. Verifizieren: `./gradlew verifyRoborazziDebug` → grün.
+3. **Der Aha-Moment:** Ändern Sie testweise ein Padding im `CharacterItem`, laufen Sie `verifyRoborazziDebug` erneut, und schauen Sie sich das erzeugte Diff-Bild unter `build/outputs/roborazzi/` an. Danach die Änderung zurücknehmen!
 
 ## ✅ Definition of Done
 
-- [ ] Alle UI-Tests liegen in `src/test/` (nicht `androidTest/`) und laufen ohne Emulator.
-- [ ] `./gradlew test` läuft grün: ViewModel-, Repository- **und** UI-Tests zusammen.
-- [ ] Die Tests finden das Favoriten-Icon über seine `contentDescription`, nicht über ein `testTag`.
-- [ ] Kein Test wartet real (`Thread.sleep` verboten).
+- [ ] Für jeden visuellen Zustand existiert ein eingechecktes Golden Image (inkl. Dark Mode).
+- [ ] `./gradlew verifyRoborazziDebug` läuft grün; nach einer absichtlichen Layout-Änderung schlägt er fehl und erzeugt ein Diff-Bild.
+- [ ] Auf keinem Screenshot ist ein "echtes" (netzwerkgeladenes) Bild zu sehen, nur die deterministischen Platzhalter.
+- [ ] `./gradlew test` bleibt grün (Screenshot-Tests laufen nur über die Roborazzi-Tasks im Verify-Modus).
 
 ## 💡 Tipps
 
-* `composeTestRule.onRoot().printToLog("TREE")` zeigt den Semantics Tree, wenn ein Finder ins Leere greift.
-* Bei mehreren Treffern (`onAllNodesWith...`): mit `[0]` indizieren oder den Finder präzisieren.
-* Die `LazyColumn` rendert nur Sichtbares. Für tiefer liegende Items `performScrollTo()` verwenden.
+* `captureRoboImage()` auf `onRoot()` nimmt den ganzen Baum auf; einzelne Knoten gehen genauso (`onNodeWithText(...).captureRoboImage()`).
+* Dark Mode: `RickAndMortyTheme(darkTheme = true)`, der Parameter existiert seit dem Einführungs-Workshop genau für so etwas.
+* Benennen Sie die Bilder sprechend (`captureRoboImage("character_list_success_dark.png")`): die Dateinamen sind Ihre Test-Dokumentation.
 
 ---
 
-**Fertig?** Die Musterlösung, und damit die Aufgabenstellung für **Übung 3.2 (Screenshot-Tests)**, finden Sie im Branch `lab-3-uebung-3.2`.
+**Fertig?** Die Musterlösung, und damit die Aufgabenstellung für **Übung 3.3 (Verschlüsselte POS-Konfiguration)**, finden Sie im Branch `lab-3-uebung-3.3`.
