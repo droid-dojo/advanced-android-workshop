@@ -1,89 +1,64 @@
-# 🧪 Lab 1 – Übung 1.1: Dependency Injection mit Hilt
+# 🏆 Das Finale: Die Enterprise-Ready Rick & Morty App
 
-**Willkommen zum Advanced Android Workshop!**
-
-Ausgangspunkt ist die fertige Rick & Morty App aus dem Einführungs-Workshop. Sie funktioniert, aber sie hat drei Schwachstellen, die wir an Tag 1 beheben: die **manuelle Objekt-Erzeugung** (diese Übung), den **fehlenden Offline-Support** (Übung 1.2) und den **monolithischen Aufbau** (Übung 1.3).
-
-> 📘 Die Theorie zu dieser Übung finden Sie im [HANDOUT.md](HANDOUT.md), **Modul 4** (Dependency Injection mit Hilt). Die benötigten Dependencies stehen in **Anhang A**.
+**Herzlichen Glückwunsch!** Sie haben das Ende des Advanced-Android-Workshops erreicht. Dieser Branch (`lab-3-final`) enthält die Musterlösung zu Übung 3.3 und damit die vollständige Referenz-Implementierung aller drei Workshop-Tage.
 
 ---
 
-## 🔍 Die Ausgangslage
+## ✅ Rückblick: Die Lösung zu Übung 3.3
 
-Werfen Sie einen Blick in `Dependencies.kt`:
+Das ist neu bzw. anders gegenüber dem Branch `lab-3-uebung-3.3`:
 
-```kotlin
-object Dependencies {
-    private val retrofit = Retrofit.Builder()...build()
-    val characterRepository = CharacterRepository(rickAndMortyApi)
-}
-```
+* **`:core:settings:api` / `:core:settings:impl`** – das neue Modul-Paar (Modul 3.3) für sensible Gerätekonfiguration:
+    * Im **api**-Modul der schmale Vertrag: `TerminalConfig` (`@Serializable`) und `SecureSettings`. Im **impl**-Modul alles andere, inklusive `SettingsCipher`, der als interner Baustein bewusst **nicht** Teil des Vertrags ist.
+    * `KeystoreSettingsCipher`: AES/GCM mit einem Schlüssel aus dem **Android Keystore**, einmalig erzeugt, danach nur noch benutzt, niemals exportierbar. Der frische IV wandert vor den Ciphertext.
+    * `EncryptedSettingsRepository`: Konfiguration → JSON → `encrypt` → Base64 → **transaktionaler** Write in den Preferences DataStore; gelesen wird reaktiv als `Flow`.
+    * `SettingsModule`: DataStore-Provider plus zwei `@Binds` (Cipher & Repository), wie an Tag 2 gelernt.
+* **`EncryptedSettingsRepositoryTest`**: drei JVM-Tests mit `FakeSettingsCipher` und Temp-DataStore. Roundtrip, `clear()`, und der wichtigste: **auf der Platte liegt kein Klartext**. Der Keystore selbst bleibt bewusst ungetestet auf der JVM: Er existiert nur auf echter Hardware, genau dafür ist der Cipher ein Interface.
 
-Ein globales `object`, aus dem sich die ViewModels ihre Abhängigkeiten selbst holen:
-
-```kotlin
-class CharacterListViewModel : ViewModel() {
-    private val repository: CharacterRepository = Dependencies.characterRepository
-}
-```
-
-Das ist ein **Service Locator**: versteckte Abhängigkeiten, keine Austauschbarkeit in Tests, kein Scoping. In einem modularen Enterprise-Projekt wäre dieses zentrale Objekt der Flaschenhals, den jedes Modul kennen müsste.
-
-## 🎯 Das Ziel
-
-Refactoren Sie die App von der manuellen Instanziierung auf eine **deklarative DI-Struktur mit Hilt**:
-
-* Kein `Dependencies.kt` mehr: die Datei wird am Ende **gelöscht**.
-* Jede Klasse deklariert ihre Abhängigkeiten **im Konstruktor** (`@Inject`).
-* Framework-Objekte (Retrofit, Api) werden in einem **Hilt-Modul** bereitgestellt.
-* Die App verhält sich für den User **exakt wie vorher**, reines Refactoring!
-
-## 🛠 Die Aufgaben im Detail
-
-### Schritt 1: Dependencies einbinden
-
-Ergänzen Sie `gradle/libs.versions.toml` und `app/build.gradle.kts` um **KSP**, **Hilt** und **hilt-lifecycle-viewmodel-compose** (die fertigen Einträge stehen im [HANDOUT.md, Anhang A](HANDOUT.md#anhang-a-setup--dependencies-für-tag-1)). Danach: Sync!
-
-### Schritt 2: Hilt aktivieren
-
-1. Erstellen Sie eine Application-Klasse `RickAndMortyApplication` mit der Annotation `@HiltAndroidApp`.
-2. Registrieren Sie sie im `AndroidManifest.xml` (`android:name`).
-3. Annotieren Sie die `MainActivity` mit `@AndroidEntryPoint`.
-
-### Schritt 3: Das Netzwerk-Modul
-
-Erstellen Sie ein `NetworkModule` (`@Module`, `@InstallIn(SingletonComponent::class)`), das die bisherigen Inhalte von `Dependencies.kt` als `@Provides`-Funktionen bereitstellt:
-
-* `Retrofit` (inkl. `Json`-Konfiguration und Converter) als `@Singleton`
-* `RickAndMortyApi` als `@Singleton`
-
-### Schritt 4: Constructor Injection im Repository
-
-Machen Sie `CharacterRepository` per `@Inject constructor` für Hilt erzeugbar und geben Sie ihm den Scope `@Singleton`.
-
-### Schritt 5: Die ViewModels
-
-1. **`CharacterListViewModel`:** Annotieren Sie es mit `@HiltViewModel` und injizieren Sie das Repository über den Konstruktor. Im `CharacterListScreen` ersetzen Sie `viewModel()` durch `hiltViewModel()`.
-2. **`CharacterDetailViewModel`:** Hier kommt die `id` zur Laufzeit aus der Navigation. Nutzen Sie **Assisted Injection** (`@HiltViewModel(assistedFactory = ...)`, `@AssistedInject`, `@Assisted`, `@AssistedFactory`). Die handgeschriebene `ViewModelProvider.Factory` können Sie ersatzlos streichen. In der `MainActivity` bauen Sie das ViewModel dann über `hiltViewModel(creationCallback = ...)` (siehe Handout, Modul 4.2, Baustein 5).
-
-### Schritt 6: Aufräumen
-
-Löschen Sie `Dependencies.kt`. Wenn das Projekt danach noch kompiliert, haben Sie nichts vergessen. 🎉
-
-## ✅ Definition of Done
-
-- [ ] `Dependencies.kt` existiert nicht mehr.
-- [ ] Kein ViewModel greift mehr auf ein globales Objekt zu, alle Abhängigkeiten stehen im Konstruktor.
-- [ ] Retrofit & Api werden über ein Hilt-Modul bereitgestellt (`@Singleton`).
-- [ ] Beide Screens funktionieren wie vorher (Liste laden, Detail öffnen, Favoriten togglen).
-- [ ] Die App baut ohne Warnungen von Hilt/KSP.
-
-## 💡 Tipps
-
-* Arbeiten Sie sich **von unten nach oben** durch den Graphen: erst Modul (Retrofit/Api), dann Repository, dann ViewModels. So bleibt das Projekt zwischendurch möglichst lange kompilierbar.
-* Hilt meldet Verdrahtungsfehler **beim Kompilieren**. Lesen Sie die Fehlermeldung genau, sie benennt fast immer die fehlende Binding-Quelle.
-* `hiltViewModel()` kommt aus `androidx.hilt.lifecycle.viewmodel.compose`, nicht mit `viewModel()` aus `lifecycle-viewmodel-compose` verwechseln.
+Vergleichen Sie gerne mit Ihrer eigenen Lösung: `git diff lab-3-uebung-3.3 lab-3-final`
 
 ---
 
-**Fertig?** Die Musterlösung, und damit die Aufgabenstellung für **Übung 1.2 (Offline-First mit Room)**, finden Sie im Branch `lab-1-uebung-1.2`.
+## 🛠 Was wir in drei Tagen gebaut haben
+
+Aus der Einsteiger-App des Einführungs-Workshops ist eine **Enterprise-Architektur** geworden:
+
+**Tag 1 – Fundament:**
+* Dependency Injection mit **Hilt** (Constructor Injection, Module, Assisted Injection) statt Service Locator.
+* **Offline-First mit Room** nach dem SSOT-Prinzip: Die UI beobachtet die Datenbank, das Netz aktualisiert sie. Favoriten überleben Neustart und Refresh.
+* **Modularisierung**: `:app`, zwei Feature-Module und eine Core-Landschaft mit compiler-erzwungenen Grenzen, bis Tag 3 gewachsen zu **api/impl-Paaren** (`:core:data`, `:core:analytics`, `:core:settings`), bei denen Features nur Verträge sehen und allein `:app` die Implementierungen verdrahtet. Die Build-Konventionen dazu stehen genau einmal: als **Convention Plugins** in `build-logic`; jedes neue Modul startet mit einer Zeile.
+
+**Tag 2 – Betriebsreife:**
+* Fehler als **Domain-Zustände** statt unkontrollierter Exceptions.
+* **Entkoppelte Observability**: Screen-Tracking als Lifecycle-Nebeneffekt in der UI, Logging hinter injizierten Interfaces in der Datenschicht; ViewModels bleiben frei.
+* **ViewModel-Tests mit virtueller Zeit**: Interface an der Nahtstelle zum Repository, Fakes, `MainDispatcherRule`, Turbine.
+
+**Tag 3 – Qualität & Sicherheit:**
+* **Compose-UI-Tests auf der JVM** (Robolectric): Semantics Tree, Finder/Assertions/Actions, in Sekunden statt Emulator-Minuten.
+* **Screenshot-Tests** in beiden Varianten: Roborazzi (Golden Images für jeden Zustand inkl. Dark Mode) und Googles Compose-Preview-Tool, mit Record/Verify-Workflows für die CI.
+* **Enterprise Security**: Hardware-verschlüsselte, transaktional gespeicherte Gerätekonfiguration; Certificate Pinning als dokumentiertes Muster.
+
+Die Test-Bilanz: **Vier Test-Suites** (Repository, Settings, ViewModel, UI) plus 13 Referenzbilder aus zwei Screenshot-Werkzeugen, alles auf der JVM, alles CI-tauglich: `./gradlew test`, `./gradlew verifyRoborazziDebug` und `./gradlew validateDebugScreenshotTest` genügen.
+
+## 💻 Den Code ausführen
+
+1. Branch auschecken, **Sync**, **Run**. Der Flugzeugmodus-Test aus Tag 1 funktioniert natürlich immer noch. 🎉
+2. Alle Tests: `./gradlew test`
+3. Screenshot-Verifikation: `./gradlew verifyRoborazziDebug` (Roborazzi) bzw. `./gradlew validateDebugScreenshotTest` (Compose-Preview-Tool)
+
+## 🎯 Wie geht es jetzt weiter? (Herausforderungen)
+
+1. **Der große Bogen:** Bauen Sie das Repository auf den typisierten `DataResult`-Wrapper um (Modul 6) und ziehen Sie die Änderung durch alle Test-Suites. Sie werden merken: Die Architektur trägt.
+2. **Screenshot-Abdeckung ausbauen:** Erweitern Sie die Preview-Screenshot-Suite um `@PreviewFontScale` (große Schriften!) und den Detail-Screen, und entscheiden Sie im Team, welches der beiden Werkzeuge Ihr Standard wird.
+3. **Onboarding-Screen:** Ein `:feature:setup`-Modul, das beim ersten Start eine `TerminalConfig` erfasst und über `SecureSettings` speichert. Damit bekommt Übung 3.3 ihre UI. Das Gradle-Setup: `alias(libs.plugins.rickandmorty.android.feature)`, fertig.
+4. **CI-Pipeline:** Setzen Sie den kompletten Workflow aus **Modul 12** um: `.github/workflows/ci.yml` mit Build-, Test- und Screenshot-Stage plus Report-Artefakten. Dank JVM-only-Tests reicht ein simpler Linux-Runner ohne Emulator; danach: CI-Check in den Branch-Protection-Regeln zur Pflicht machen.
+
+## 📚 Wichtige Ressourcen zum Nachschlagen
+
+* **Unser Workshop-Handout:** [📘 HANDOUT.md](HANDOUT.md) (Module 1–12 + Anhänge)
+* **Compose Testing:** [developer.android.com/develop/ui/compose/testing](https://developer.android.com/develop/ui/compose/testing)
+* **Screenshot-Testing:** [developer.android.com/training/testing/ui-tests/screenshot](https://developer.android.com/training/testing/ui-tests/screenshot)
+* **Android Keystore:** [developer.android.com/privacy-and-security/keystore](https://developer.android.com/privacy-and-security/keystore)
+* **Now in Android** (Googles Referenz-App mit genau dieser Architektur): [github.com/android/nowinandroid](https://github.com/android/nowinandroid)
+
+**Vielen Dank für drei großartige Workshop-Tage und viel Erfolg in Ihren eigenen Projekten!**

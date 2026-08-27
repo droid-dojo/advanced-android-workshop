@@ -1,4 +1,6 @@
 pluginManagement {
+    // Our convention plugins (rickandmorty.android.*) live in this included build
+    includeBuild("build-logic")
     repositories {
         google {
             content {
@@ -26,3 +28,13 @@ enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 
 rootProject.name = "rick-and-morty"
 include(":app")
+include(":core:model")
+include(":core:ui")
+include(":core:data:api")
+include(":core:data:impl")
+include(":core:analytics:api")
+include(":core:analytics:impl")
+include(":core:settings:api")
+include(":core:settings:impl")
+include(":feature:characterlist")
+include(":feature:characterdetail")
